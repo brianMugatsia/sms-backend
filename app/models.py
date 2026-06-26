@@ -1,4 +1,5 @@
-from sqlalchemy import Column, String, DateTime
+from sqlalchemy import Column, String, DateTime, DateTime, func
+from typing import Optional
 from datetime import datetime
 from app.database import Base
 from pydantic import BaseModel
@@ -11,7 +12,7 @@ class SmsModel(Base):
     sender = Column(String(255), nullable=False)
     message = Column(String(500), nullable=False)
     device_id = Column(String(255), nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
 class UserModel(Base):
     __tablename__ = "users"
@@ -29,11 +30,12 @@ class Sms(BaseModel):
     device_id: str
     role: str | None = None
     read: bool = False
+    timestamp: Optional[datetime] = None
 class User(BaseModel):
     username: str
     email: str
     password: str
-    role: str
+    role: Optional[str] = None 
 
 class LoginRequest(BaseModel):
     username: str

@@ -3,8 +3,10 @@ from sqlalchemy.orm import Session
 from fastapi.security import OAuth2PasswordBearer
 from app import models, crud, database, auth
 from app.websocket import manager
+import logging
 
 router = APIRouter()
+logger = logging.getLogger("sms_backend")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/users/login")
 
@@ -21,28 +23,28 @@ def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ):
-    print("=" * 60)
-    print("TOKEN RECEIVED:", token)
+    try:
+        print("TOKEN RECEIVED:", token)
 
-    payload = auth.decode_access_token(token)
-    print("PAYLOAD:", payload)
+        payload = auth.decode_access_token(token)
 
-    if payload is None:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        if not payload:
+            raise HTTPException(status_code=401, detail="Invalid token")
 
-    username = payload.get("sub")
-    print("USERNAME:", username)
+        username = payload.get("sub")
 
-    user = db.query(models.UserModel).filter(
-        models.UserModel.username == username
-    ).first()
+        user = db.query(models.UserModel).filter(
+            models.UserModel.username == username
+        ).first()
 
-    print("USER FOUND:", user)
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
 
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
+        return user
 
-    return user
+    except Exception as e:
+        print("AUTH ERROR:", str(e))
+        raise HTTPException(status_code=401, detail="Auth failed")
 
 # Forward SMS (any authenticated user)
 @router.post("/sms/forward")
@@ -54,20 +56,28 @@ async def forward_sms(
     try:
         saved = crud.save_sms(db, sms)
 
+        # ✅ Refresh to load DB defaults like timestamp
+        db.refresh(saved)
+
+        # Broadcast to all connected clients
         await manager.broadcast({
             "id": saved.id,
-            "sender": sms.sender,
-            "message": sms.message,
-            "device_id": sms.device_id,
+            "sender": saved.sender,
+            "message": saved.message,
+            "device_id": saved.device_id,
             "forwarded_by": current_user.username,
-            "role": current_user.role
+            "role": current_user.role,
+            "timestamp": saved.timestamp.isoformat() if saved.timestamp else None
         })
+
+        logger.info(f"Broadcasted SMS {saved.id} from {saved.sender}")
 
         return {
             "status": "SMS forwarded",
             "id": saved.id,
             "sender": current_user.username,
-            "role": current_user.role
+            "role": current_user.role,
+            "timestamp": saved.timestamp.isoformat() if saved.timestamp else None
         }
 
     except Exception as e:
@@ -84,7 +94,6 @@ async def list_sms(
 ):
     try:
         return crud.get_all_sms(db)
-
     except Exception as e:
         raise HTTPException(
             status_code=500,

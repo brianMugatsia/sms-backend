@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from app import models, crud, database, auth
 from datetime import timedelta
 from app.auth import get_current_user
-
 from fastapi.security import OAuth2PasswordRequestForm
 
 router = APIRouter()
@@ -17,8 +17,15 @@ def get_db():
 
 @router.post("/users/register")
 async def register_user(user: models.User, db: Session = Depends(get_db)):
-    saved = crud.create_user(db, user)
-    return {"status": "User registered", "id": saved.id}
+    try:
+        saved = crud.create_user(db, user)
+        return {"status": "User registered", "id": saved.id}
+    except IntegrityError:
+        db.rollback()  # rollback transaction so session stays usable
+        raise HTTPException(
+            status_code=400,
+            detail="Username or email already exists"
+        )
 
 @router.post("/users/login")
 async def login(

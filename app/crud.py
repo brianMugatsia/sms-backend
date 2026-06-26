@@ -1,6 +1,8 @@
 from sqlalchemy.orm import Session
 from app.models import UserModel
 from app import models
+from datetime import datetime
+
 import uuid
 from app.auth import get_password_hash, verify_password
 
@@ -10,7 +12,8 @@ def save_sms(db: Session, sms: models.Sms):
         id=str(uuid.uuid4()),
         sender=sms.sender,
         message=sms.message,
-        device_id=sms.device_id
+        device_id=sms.device_id,
+        timestamp=datetime.utcnow() 
     )
     db.add(sms_entry)
     db.commit()
@@ -26,7 +29,7 @@ def create_user(db: Session, user: models.User):
         username=user.username,
         email=user.email,
         hashed_password=get_password_hash(user.password),
-        role=user.role
+        role=user.role or "user"
     )
     db.add(user_entry)
     db.commit()

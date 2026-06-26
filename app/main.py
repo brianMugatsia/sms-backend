@@ -34,7 +34,7 @@ app = FastAPI(title="SMS Forwarding Backend")
 
 @app.get("/")
 async def root():
-    return JSONResponse(content={"message": "SMS Forwarding Backend is running 🚀"})
+    return JSONResponse(content={"message": "SMS Forwarding Backend is running "})
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):

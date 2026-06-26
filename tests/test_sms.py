@@ -1,14 +1,62 @@
-from fastapi.testclient import TestClient
-from app.main import app
+import requests
 
-client = TestClient(app)
 
-def test_forward_sms():
-    response = client.post("/api/sms/forward", json={
-        "sender": "Alice", "message": "Hello", "device_id": "phone1"
-    }, headers={"Authorization": "Bearer testtoken"})
-    assert response.status_code in [200, 401, 403]  # depends on auth
+BASE_URL = "http://127.0.0.1:8000"
 
-def test_list_sms():
-    response = client.get("/api/sms/list", headers={"Authorization": "Bearer testtoken"})
-    assert response.status_code in [200, 401, 403]
+
+USERNAME = "brian"
+PASSWORD = "brian123"
+
+
+def login():
+
+    response = requests.post(
+        f"{BASE_URL}/api/users/login",
+        data={
+            "username": USERNAME,
+            "password": PASSWORD
+        }
+    )
+
+    print("LOGIN STATUS:", response.status_code)
+
+    if response.status_code != 200:
+        print(response.text)
+        exit()
+
+    token = response.json()["access_token"]
+
+    print("TOKEN:", token[:50], "...")
+
+    return token
+
+
+
+def send_sms(token):
+
+    sms = {
+        "sender": "+254792117538",
+        "message": "Hello from test.py ",
+        "device_id": "android"
+    }
+
+
+    response = requests.post(
+        f"{BASE_URL}/api/sms/forward",
+        json=sms,
+        headers={
+            "Authorization": f"Bearer {token}"
+        }
+    )
+
+
+    print("SMS STATUS:", response.status_code)
+    print(response.json())
+
+
+
+if __name__ == "__main__":
+
+    token = login()
+
+    send_sms(token)
