@@ -4,11 +4,15 @@ from fastapi.security import OAuth2PasswordBearer
 from app import models, crud, database, auth
 from app.websocket import manager
 import logging
+import pytz
 
 router = APIRouter()
 logger = logging.getLogger("sms_backend")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/users/login")
+
+# Nairobi timezone
+nairobi_tz = pytz.timezone("Africa/Nairobi")
 
 # Dependency: DB session
 def get_db():
@@ -56,8 +60,14 @@ async def forward_sms(
     try:
         saved = crud.save_sms(db, sms)
 
-        # ✅ Refresh to load DB defaults like timestamp
+        # Refresh to load DB defaults like timestamp
         db.refresh(saved)
+
+        # Convert UTC timestamp to Nairobi time
+        timestamp_nairobi = (
+            saved.timestamp.astimezone(nairobi_tz).isoformat()
+            if saved.timestamp else None
+        )
 
         # Broadcast to all connected clients
         await manager.broadcast({
@@ -67,7 +77,7 @@ async def forward_sms(
             "device_id": saved.device_id,
             "forwarded_by": current_user.username,
             "role": current_user.role,
-            "timestamp": saved.timestamp.isoformat() if saved.timestamp else None
+            "timestamp": timestamp_nairobi
         })
 
         logger.info(f"Broadcasted SMS {saved.id} from {saved.sender}")
@@ -77,7 +87,7 @@ async def forward_sms(
             "id": saved.id,
             "sender": current_user.username,
             "role": current_user.role,
-            "timestamp": saved.timestamp.isoformat() if saved.timestamp else None
+            "timestamp": timestamp_nairobi
         }
 
     except Exception as e:
@@ -93,7 +103,14 @@ async def list_sms(
     current_user=Depends(get_current_user)
 ):
     try:
-        return crud.get_all_sms(db)
+        sms_list = crud.get_all_sms(db)
+
+        # Convert each timestamp to Nairobi time
+        for sms in sms_list:
+            if sms.timestamp:
+                sms.timestamp = sms.timestamp.astimezone(nairobi_tz)
+
+        return sms_list
     except Exception as e:
         raise HTTPException(
             status_code=500,

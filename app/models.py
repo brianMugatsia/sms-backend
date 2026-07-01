@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, DateTime, func
+from sqlalchemy import Column, String, DateTime, func
 from typing import Optional
 from datetime import datetime
 from app.database import Base
@@ -12,6 +12,7 @@ class SmsModel(Base):
     sender = Column(String(255), nullable=False)
     message = Column(String(500), nullable=False)
     device_id = Column(String(255), nullable=False)
+    #  Store UTC timestamps, timezone-aware
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
 class UserModel(Base):
@@ -31,6 +32,7 @@ class Sms(BaseModel):
     role: str | None = None
     read: bool = False
     timestamp: Optional[datetime] = None
+
 class User(BaseModel):
     username: str
     email: str
