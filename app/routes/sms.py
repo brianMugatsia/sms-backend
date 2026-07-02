@@ -48,19 +48,28 @@ async def forward_sms(sms: models.Sms, current_user=Depends(get_current_user)):
 
     external_response = send_to_external_endpoint(sms_payload)
 
-    #  Broadcast combined payload to dashboard
+    #  Flattened broadcast payload for frontend
     broadcast_payload = {
-        "type": "sms_forwarded",
-        "sms": sms_payload,
-        "external_response": external_response
+        "sender": sms_payload["sender"],
+        "message": sms_payload["message"],
+        "device_id": sms_payload["device_id"],
+        "forwarded_by": sms_payload["forwarded_by"],
+        "role": sms_payload["role"],
+        "timestamp": sms_payload["timestamp"],
+        "responseId": external_response.get("responseId"),
+        "responseTimeStamp": external_response.get("responseTimeStamp"),
+        "statusCode": external_response.get("responseParam", {}).get("statusCode"),
+        "description": external_response.get("responseParam", {}).get("description"),
     }
-    logger.info(f"Broadcasting SMS to clients: {broadcast_payload}")
+
+    logger.info(f"Broadcasting flattened SMS payload: {broadcast_payload}")
     await manager.broadcast(broadcast_payload)
 
     if "error" in external_response:
         raise HTTPException(status_code=502, detail=external_response)
 
     return {"status": "SMS sent to external endpoint", "external_response": external_response}
+
 
 @router.get("/sms/list")
 async def list_sms(current_user=Depends(get_current_user)):
