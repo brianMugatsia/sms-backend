@@ -47,7 +47,15 @@ async def forward_sms(sms: models.Sms, current_user=Depends(get_current_user)):
     }
 
     external_response = send_to_external_endpoint(sms_payload)
-    await manager.broadcast(sms_payload)
+
+    #  Broadcast combined payload to dashboard
+    broadcast_payload = {
+        "type": "sms_forwarded",
+        "sms": sms_payload,
+        "external_response": external_response
+    }
+    logger.info(f"Broadcasting SMS to clients: {broadcast_payload}")
+    await manager.broadcast(broadcast_payload)
 
     if "error" in external_response:
         raise HTTPException(status_code=502, detail=external_response)

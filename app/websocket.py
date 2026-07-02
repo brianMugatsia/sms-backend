@@ -7,23 +7,26 @@ import json
 router = APIRouter()
 logger = logging.getLogger("sms_backend")
 
-
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
         self.connection_roles: Dict[WebSocket, str] = {}
 
     async def connect(self, websocket: WebSocket, role: str):
-        #  no websocket.accept() here
+        # Accept once here
+        await websocket.accept()
         self.active_connections.append(websocket)
         self.connection_roles[websocket] = role
+        logger.info(f"WebSocket connected: role={role}, total={len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
             self.connection_roles.pop(websocket, None)
+            logger.info(f"WebSocket disconnected, total={len(self.active_connections)}")
 
     async def broadcast(self, message: dict, role: Optional[str] = None):
+        logger.info(f"Broadcasting message to clients: {message}")
         for connection in list(self.active_connections):
             try:
                 if role is None or self.connection_roles.get(connection) == role:
@@ -31,19 +34,16 @@ class ConnectionManager:
             except Exception as e:
                 logger.error(f"Broadcast error: {e}")
 
-
 #  Define manager at module level so other files can import it
 manager = ConnectionManager()
 
-
 @router.websocket("/ws/sms")
 async def sms_websocket(websocket: WebSocket, token: Optional[str] = Query(None)):
-    #  Accept here only once
-    await websocket.accept()
     print("WS CONNECT ATTEMPT")
     print("TOKEN:", token)
 
     if not token:
+        await websocket.accept()
         await websocket.send_json({"type": "error", "message": "Missing token"})
         await websocket.close()
         return
@@ -54,6 +54,7 @@ async def sms_websocket(websocket: WebSocket, token: Optional[str] = Query(None)
         if not payload:
             raise Exception("Invalid token")
     except Exception as e:
+        await websocket.accept()
         print("AUTH ERROR:", str(e))
         await websocket.send_json({"type": "error", "message": "Invalid token"})
         await websocket.close()
