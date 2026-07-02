@@ -1,60 +1,41 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
-from app import models, crud, database, auth
-from datetime import timedelta
-from app.auth import get_current_user
 from fastapi.security import OAuth2PasswordRequestForm
+from datetime import timedelta
+from app import models, auth
+import requests
+import logging
 
 router = APIRouter()
+logger = logging.getLogger("sms_backend")
 
-def get_db():
-    db = database.SessionLocal()
+def send_to_external_endpoint(data: dict):
+    url = "https://endpint.roberms.com/roberms/aop/"
     try:
-        yield db
-    finally:
-        db.close()
+        response = requests.post(url, json=data, timeout=10)
+        response.raise_for_status()
+        external_json = response.json()
+
+        # Log responseId and responseTimeStamp if present
+        resp_id = external_json.get("responseId")
+        resp_ts = external_json.get("responseTimeStamp")
+        logger.info(f"External user response: responseId={resp_id}, responseTimeStamp={resp_ts}")
+
+        return external_json
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to send user data to external endpoint: {e}")
+        return {"error": "External endpoint unreachable", "detail": str(e)}
 
 @router.post("/users/register")
-async def register_user(user: models.User, db: Session = Depends(get_db)):
-    try:
-        saved = crud.create_user(db, user)
-        return {"status": "User registered", "id": saved.id}
-    except IntegrityError:
-        db.rollback()  # rollback transaction so session stays usable
-        raise HTTPException(
-            status_code=400,
-            detail="Username or email already exists"
-        )
+async def register_user(user: models.User):
+    external_response = send_to_external_endpoint(user.dict())
+    if "error" in external_response:
+        raise HTTPException(status_code=502, detail=external_response)
+    return {"status": "User forwarded to external endpoint", "external_response": external_response}
 
 @router.post("/users/login")
-async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db)
-):
-    user = crud.authenticate_user(
-        db,
-        form_data.username,
-        form_data.password
-    )
-
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     access_token = auth.create_access_token(
-        data={"sub": user.username},
+        data={"sub": form_data.username},
         expires_delta=timedelta(minutes=30)
     )
-
-    return {
-        "access_token": access_token,
-        "token_type": "bearer"
-    }
-
-@router.post("/users/refresh")
-async def refresh_token(current_user=Depends(get_current_user)):
-    new_access_token = auth.create_access_token(
-        data={"sub": current_user.username},
-        expires_delta=timedelta(minutes=30)
-    )
-    return {"access_token": new_access_token, "token_type": "bearer"}
+    return {"access_token": access_token, "token_type": "bearer"}

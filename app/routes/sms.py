@@ -1,118 +1,73 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 from fastapi.security import OAuth2PasswordBearer
-from app import models, crud, database, auth
+from app import models, auth
 from app.websocket import manager
 import logging
 import pytz
+import requests
 
 router = APIRouter()
 logger = logging.getLogger("sms_backend")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/users/login")
-
-# Nairobi timezone
 nairobi_tz = pytz.timezone("Africa/Nairobi")
 
-# Dependency: DB session
-def get_db():
-    db = database.SessionLocal()
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    payload = auth.decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return {"username": payload.get("sub")}
+
+def send_to_external_endpoint(data: dict):
+    url = "https://endpint.roberms.com/roberms/aop/"
     try:
-        yield db
-    finally:
-        db.close()
+        response = requests.post(url, json=data, timeout=10)
+        response.raise_for_status()
+        external_json = response.json()
 
-# Dependency: Current user from JWT
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db)
-):
-    try:
-        print("TOKEN RECEIVED:", token)
+        # Log responseId and responseTimeStamp if present
+        resp_id = external_json.get("responseId")
+        resp_ts = external_json.get("responseTimeStamp")
+        logger.info(f"External response: responseId={resp_id}, responseTimeStamp={resp_ts}")
 
-        payload = auth.decode_access_token(token)
+        return external_json
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to send SMS to external endpoint: {e}")
+        return {"error": "External endpoint unreachable", "detail": str(e)}
 
-        if not payload:
-            raise HTTPException(status_code=401, detail="Invalid token")
-
-        username = payload.get("sub")
-
-        user = db.query(models.UserModel).filter(
-            models.UserModel.username == username
-        ).first()
-
-        if not user:
-            raise HTTPException(status_code=401, detail="User not found")
-
-        return user
-
-    except Exception as e:
-        print("AUTH ERROR:", str(e))
-        raise HTTPException(status_code=401, detail="Auth failed")
-
-# Forward SMS (any authenticated user)
 @router.post("/sms/forward")
-async def forward_sms(
-    sms: models.Sms,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
-):
-    try:
-        saved = crud.save_sms(db, sms)
+async def forward_sms(sms: models.Sms, current_user=Depends(get_current_user)):
+    sms_payload = {
+        "sender": sms.sender,
+        "message": sms.message,
+        "device_id": sms.device_id,
+        "forwarded_by": current_user["username"],
+        "role": sms.role or "user",
+        "timestamp": sms.timestamp.astimezone(nairobi_tz).isoformat() if sms.timestamp else None
+    }
 
-        # Refresh to load DB defaults like timestamp
-        db.refresh(saved)
+    external_response = send_to_external_endpoint(sms_payload)
+    await manager.broadcast(sms_payload)
 
-        # Convert UTC timestamp to Nairobi time
-        timestamp_nairobi = (
-            saved.timestamp.astimezone(nairobi_tz).isoformat()
-            if saved.timestamp else None
-        )
+    if "error" in external_response:
+        raise HTTPException(status_code=502, detail=external_response)
 
-        # Broadcast to all connected clients
-        await manager.broadcast({
-            "id": saved.id,
-            "sender": saved.sender,
-            "message": saved.message,
-            "device_id": saved.device_id,
-            "forwarded_by": current_user.username,
-            "role": current_user.role,
-            "timestamp": timestamp_nairobi
-        })
+    return {"status": "SMS sent to external endpoint", "external_response": external_response}
 
-        logger.info(f"Broadcasted SMS {saved.id} from {saved.sender}")
-
-        return {
-            "status": "SMS forwarded",
-            "id": saved.id,
-            "sender": current_user.username,
-            "role": current_user.role,
-            "timestamp": timestamp_nairobi
-        }
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error saving SMS: {str(e)}"
-        )
-
-# List SMS (any authenticated user)
 @router.get("/sms/list")
-async def list_sms(
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user)
-):
+async def list_sms(current_user=Depends(get_current_user)):
+    url = "https://endpint.roberms.com/roberms/aop/"
     try:
-        sms_list = crud.get_all_sms(db)
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        external_json = response.json()
 
-        # Convert each timestamp to Nairobi time
-        for sms in sms_list:
-            if sms.timestamp:
-                sms.timestamp = sms.timestamp.astimezone(nairobi_tz)
+        # Log responseId and responseTimeStamp if present
+        resp_id = external_json.get("responseId")
+        resp_ts = external_json.get("responseTimeStamp")
+        logger.info(f"External list response: responseId={resp_id}, responseTimeStamp={resp_ts}")
 
-        return sms_list
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching SMS: {str(e)}"
-        )
+        return external_json
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to fetch SMS from external endpoint: {e}")
+        raise HTTPException(status_code=502, detail={"error": "External endpoint unreachable", "detail": str(e)})
