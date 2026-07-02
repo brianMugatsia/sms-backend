@@ -39,3 +39,16 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         expires_delta=timedelta(minutes=30)
     )
     return {"access_token": access_token, "token_type": "bearer"}
+
+#  New refresh endpoint
+@router.post("/users/refresh")
+async def refresh_token(current_user=Depends(auth.get_current_user)):
+    try:
+        new_token = auth.create_access_token(
+            data={"sub": current_user["username"]},
+            expires_delta=timedelta(minutes=30)
+        )
+        return {"access_token": new_token, "token_type": "bearer"}
+    except Exception as e:
+        logger.error(f"Token refresh failed: {e}")
+        raise HTTPException(status_code=401, detail="Could not refresh token")
