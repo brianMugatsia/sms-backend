@@ -5,12 +5,16 @@ from app.websocket import manager
 import logging
 import pytz
 import requests
+import os
 
 router = APIRouter()
 logger = logging.getLogger("sms_backend")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/users/login")
 nairobi_tz = pytz.timezone("Africa/Nairobi")
+
+#  Use environment variable for endpoint (can be overridden per user later)
+EXTERNAL_URL = os.getenv("ENDPOINT_URL", "https://endpint.roberms.com/roberms/aop/")
 
 def get_current_user(token: str = Depends(oauth2_scheme)):
     payload = auth.decode_access_token(token)
@@ -19,9 +23,8 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
     return {"username": payload.get("sub")}
 
 def send_to_external_endpoint(data: dict):
-    url = "https://endpint.roberms.com/roberms/aop/"
     try:
-        response = requests.post(url, json=data, timeout=10)
+        response = requests.post(EXTERNAL_URL, json=data, timeout=10)
         response.raise_for_status()
         external_json = response.json()
 
@@ -72,9 +75,8 @@ async def forward_sms(sms: models.Sms, current_user=Depends(get_current_user)):
 
 @router.get("/sms/list")
 async def list_sms(current_user=Depends(get_current_user)):
-    url = "https://endpint.roberms.com/roberms/aop/"
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(EXTERNAL_URL, timeout=10)
         response.raise_for_status()
         external_json = response.json()
 
