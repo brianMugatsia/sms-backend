@@ -13,14 +13,14 @@ from app.routes import sms, users
 from app.websocket import router as ws_router
 from app.config import SERVICE_NAME, SERVICE_VERSION
 
-# ---------------------------------------------------------
-# Load environment variables
-# ---------------------------------------------------------
+# ==========================================================
+# Load Environment Variables
+# ==========================================================
 load_dotenv()
 
-# ---------------------------------------------------------
-# Configure logging
-# ---------------------------------------------------------
+# ==========================================================
+# Logging
+# ==========================================================
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -28,9 +28,9 @@ logging.basicConfig(
 
 logger = logging.getLogger("sms_backend")
 
-# ---------------------------------------------------------
+# ==========================================================
 # Sentry
-# ---------------------------------------------------------
+# ==========================================================
 SENTRY_DSN = os.getenv("SENTRY_DSN")
 
 if SENTRY_DSN:
@@ -42,32 +42,33 @@ if SENTRY_DSN:
         ),
         send_default_pii=True,
     )
+
     logger.info("Sentry initialized")
 else:
     logger.info("Sentry disabled")
 
 
-# ---------------------------------------------------------
+# ==========================================================
 # Lifespan
-# ---------------------------------------------------------
+# ==========================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    logger.info("===================================")
+    logger.info("====================================")
     logger.info("%s starting...", SERVICE_NAME)
-    logger.info("Version: %s", SERVICE_VERSION)
-    logger.info("===================================")
+    logger.info("Version : %s", SERVICE_VERSION)
+    logger.info("====================================")
 
     yield
 
-    logger.info("===================================")
+    logger.info("====================================")
     logger.info("%s shutting down...", SERVICE_NAME)
-    logger.info("===================================")
+    logger.info("====================================")
 
 
-# ---------------------------------------------------------
+# ==========================================================
 # FastAPI
-# ---------------------------------------------------------
+# ==========================================================
 app = FastAPI(
     title=SERVICE_NAME,
     version=SERVICE_VERSION,
@@ -75,23 +76,34 @@ app = FastAPI(
 )
 
 
-# ---------------------------------------------------------
-# Root
-# ---------------------------------------------------------
+# ==========================================================
+# Root Endpoint
+# ==========================================================
 @app.get("/")
 async def root():
-    return JSONResponse(
-        {
-            "status": "healthy",
-            "service": SERVICE_NAME,
-            "version": SERVICE_VERSION,
-        }
-    )
+    return {
+        "status": "healthy",
+        "service": SERVICE_NAME,
+        "version": SERVICE_VERSION,
+    }
 
 
-# ---------------------------------------------------------
-# Request Logging Middleware
-# ---------------------------------------------------------
+# ==========================================================
+# Health Endpoint
+# Used by Android app
+# ==========================================================
+@app.get("/api/health")
+async def health():
+    return {
+        "status": "healthy",
+        "service": SERVICE_NAME,
+        "version": SERVICE_VERSION,
+    }
+
+
+# ==========================================================
+# Request Logging
+# ==========================================================
 @app.middleware("http")
 async def request_logger(request: Request, call_next):
 
@@ -103,7 +115,14 @@ async def request_logger(request: Request, call_next):
         request.url.path,
     )
 
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+
+    except Exception as e:
+
+        logger.exception("Unhandled Exception")
+
+        raise e
 
     duration = round(
         (time.perf_counter() - start) * 1000,
@@ -120,9 +139,9 @@ async def request_logger(request: Request, call_next):
     return response
 
 
-# ---------------------------------------------------------
-# Routes
-# ---------------------------------------------------------
+# ==========================================================
+# Register Routers
+# ==========================================================
 app.include_router(
     sms.router,
     prefix="/api",
@@ -136,3 +155,23 @@ app.include_router(
 )
 
 app.include_router(ws_router)
+
+
+# ==========================================================
+# Global Exception Handler
+# ==========================================================
+@app.exception_handler(Exception)
+async def global_exception_handler(
+    request: Request,
+    exc: Exception,
+):
+
+    logger.exception("Unhandled server error")
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "message": "Internal Server Error",
+        },
+    )
