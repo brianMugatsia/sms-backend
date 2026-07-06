@@ -1,126 +1,79 @@
 from datetime import timedelta
-import logging
 
-import requests
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy.orm import Session
 
-from app import auth, models
-from app.config import (
-    EXTERNAL_ENDPOINT,
-    EXTERNAL_TIMEOUT,
-)
+from app import auth, crud, schemas
+from app.database import get_db
 
 router = APIRouter()
-logger = logging.getLogger("sms_backend")
-
-# ---------------------------------------------------------
-# Shared HTTP session
-# ---------------------------------------------------------
-session = requests.Session()
 
 
-def send_to_external_endpoint(data: dict):
-
-    try:
-
-        response = session.post(
-            EXTERNAL_ENDPOINT,
-            json=data,
-            timeout=EXTERNAL_TIMEOUT,
-        )
-
-        response.raise_for_status()
-
-        external_json = response.json()
-
-        logger.info(
-            "External responseId=%s responseTimeStamp=%s",
-            external_json.get("responseId"),
-            external_json.get("responseTimeStamp"),
-        )
-
-        return external_json
-
-    except requests.exceptions.RequestException as e:
-
-        logger.exception("External endpoint unavailable")
-
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "error": "External endpoint unavailable",
-                "message": str(e),
-            },
-        )
-
-
-# ---------------------------------------------------------
-# Register
-# ---------------------------------------------------------
-@router.post("/users/register")
-async def register_user(user: models.User):
-
-    payload = {
-        "username": user.username,
-        "email": user.email,
-        "password": user.password,
-        "role": user.role,
-        "endpoint_url": user.endpoint_url,
-    }
-
-    logger.info(
-        "Registering user %s",
-        user.username,
-    )
-
-    external_response = send_to_external_endpoint(payload)
-
-    return {
-        "success": True,
-        "responseId": external_response.get("responseId"),
-        "responseTimeStamp": external_response.get(
-            "responseTimeStamp"
-        ),
-    }
-
-
-# ---------------------------------------------------------
-# Login
-# ---------------------------------------------------------
-@router.post("/users/login")
-async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
+# ==========================================================
+# REGISTER
+# ==========================================================
+@router.post(
+    "/users/register",
+    response_model=schemas.UserResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def register_user(
+    user: schemas.UserCreate,
+    db: Session = Depends(get_db),
 ):
 
-    logger.info(
-        "Login requested by %s",
+    try:
+        return crud.create_user(db, user)
+
+    except ValueError as e:
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+# ==========================================================
+# LOGIN
+# ==========================================================
+@router.post(
+    "/users/login",
+    response_model=schemas.TokenResponse,
+)
+def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+
+    user = crud.authenticate_user(
+        db,
         form_data.username,
+        form_data.password,
     )
 
-    #
-    # In production this should validate against
-    # your authentication service/database.
-    #
+    if user is None:
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password",
+        )
 
     access_token = auth.create_access_token(
-        data={
-            "sub": form_data.username,
-            "role": "user",
+        {
+            "sub": user.username,
+            "user_id": user.id,
+            "role": user.role,
         },
         expires_delta=timedelta(minutes=30),
     )
 
     refresh_token = auth.create_refresh_token(
         {
-            "sub": form_data.username,
-            "role": "user",
+            "sub": user.username,
+            "user_id": user.id,
+            "role": user.role,
         }
-    )
-
-    logger.info(
-        "Login successful for %s",
-        form_data.username,
     )
 
     return {
@@ -131,25 +84,24 @@ async def login(
     }
 
 
-# ---------------------------------------------------------
-# Refresh Token
-# ---------------------------------------------------------
+# ==========================================================
+# REFRESH TOKEN
+# ==========================================================
 @router.post("/users/refresh")
-async def refresh_token(
-    current_user=Depends(auth.get_current_user),
+def refresh_token(
+
+    current_user=Depends(
+        auth.get_current_refresh_user
+    ),
+
 ):
 
-    logger.info(
-        "Refreshing token for %s",
-        current_user["username"],
-    )
-
     access_token = auth.create_access_token(
-        data={
+        {
             "sub": current_user["username"],
+            "user_id": current_user["user_id"],
             "role": current_user["role"],
-        },
-        expires_delta=timedelta(minutes=30),
+        }
     )
 
     return {
@@ -159,15 +111,55 @@ async def refresh_token(
     }
 
 
-# ---------------------------------------------------------
-# Current User
-# ---------------------------------------------------------
-@router.get("/users/me")
-async def current_user(
-    user=Depends(auth.get_current_user),
+# ==========================================================
+# CURRENT USER
+# ==========================================================
+@router.get(
+    "/users/me",
+    response_model=schemas.UserResponse,
+)
+def current_user(
+
+    db: Session = Depends(get_db),
+
+    token_user=Depends(
+        auth.get_current_user
+    ),
+
 ):
 
-    return {
-        "username": user["username"],
-        "role": user["role"],
-    }
+    user = crud.get_user_by_id(
+        db,
+        token_user["user_id"],
+    )
+
+    if user is None:
+
+        raise HTTPException(
+            status_code=404,
+            detail="User not found",
+        )
+
+    return user
+
+
+# ==========================================================
+# LIST USERS (ADMIN)
+# ==========================================================
+@router.get(
+    "/users",
+    response_model=list[schemas.UserResponse],
+)
+def list_users(
+    db: Session = Depends(get_db),
+    current_user=Depends(auth.get_current_user),
+):
+
+    if current_user["role"] != "admin":
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+
+    return crud.get_users(db)

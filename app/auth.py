@@ -1,26 +1,20 @@
 import os
-import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from dotenv import load_dotenv
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-# ---------------------------------------------------------
-# Load Environment
-# ---------------------------------------------------------
 load_dotenv()
 
-logger = logging.getLogger("sms_backend")
-
-# ---------------------------------------------------------
-# JWT Configuration
-# ---------------------------------------------------------
-SECRET_KEY = os.getenv("JWT_SECRET", "fallback-secret")
-
+# ==========================================================
+# JWT SETTINGS
+# ==========================================================
+SECRET_KEY = os.getenv("JWT_SECRET")
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
 ACCESS_TOKEN_EXPIRE_MINUTES = int(
@@ -31,45 +25,47 @@ REFRESH_TOKEN_EXPIRE_DAYS = int(
     os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7")
 )
 
-# ---------------------------------------------------------
-# Password Hashing
-# ---------------------------------------------------------
+# ==========================================================
+# PASSWORD HASHING
+# ==========================================================
 pwd_context = CryptContext(
     schemes=["argon2"],
     deprecated="auto",
 )
 
-# ---------------------------------------------------------
-# OAuth2
-# ---------------------------------------------------------
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl="/api/users/login"
 )
 
-# ---------------------------------------------------------
-# Password Helpers
-# ---------------------------------------------------------
+
+# ==========================================================
+# PASSWORD HELPERS
+# ==========================================================
 def verify_password(
     plain_password: str,
     hashed_password: str,
-) -> bool:
+):
+
     return pwd_context.verify(
         plain_password,
         hashed_password,
     )
 
 
-def get_password_hash(password: str) -> str:
+def get_password_hash(
+    password: str,
+):
+
     return pwd_context.hash(password)
 
 
-# ---------------------------------------------------------
-# JWT Helpers
-# ---------------------------------------------------------
+# ==========================================================
+# ACCESS TOKEN
+# ==========================================================
 def create_access_token(
     data: dict,
     expires_delta: Optional[timedelta] = None,
-) -> str:
+):
 
     to_encode = data.copy()
 
@@ -94,9 +90,12 @@ def create_access_token(
     )
 
 
+# ==========================================================
+# REFRESH TOKEN
+# ==========================================================
 def create_refresh_token(
     data: dict,
-) -> str:
+):
 
     to_encode = data.copy()
 
@@ -118,7 +117,10 @@ def create_refresh_token(
     )
 
 
-def decode_access_token(
+# ==========================================================
+# TOKEN DECODER
+# ==========================================================
+def decode_token(
     token: str,
 ):
 
@@ -132,49 +134,60 @@ def decode_access_token(
 
         return payload
 
-    except JWTError as e:
-
-        logger.warning(
-            "JWT decode failed: %s",
-            str(e),
-        )
+    except JWTError:
 
         return None
 
 
-# ---------------------------------------------------------
-# Authentication Dependency
-# ---------------------------------------------------------
+# ==========================================================
+# CURRENT USER
+# ==========================================================
 def get_current_user(
     token: str = Depends(oauth2_scheme),
 ):
 
-    payload = decode_access_token(token)
+    payload = decode_token(token)
 
     if payload is None:
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
-            headers={
-                "WWW-Authenticate": "Bearer",
-            },
-        )
-
-    username = payload.get("sub")
-
-    if not username:
-
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={
-                "WWW-Authenticate": "Bearer",
-            },
         )
 
     return {
-        "username": username,
+        "user_id": payload.get("user_id"),
+        "username": payload.get("sub"),
         "role": payload.get("role", "user"),
         "token_type": payload.get("type", "access"),
+    }
+
+
+# ==========================================================
+# REFRESH USER
+# ==========================================================
+def get_current_refresh_user(
+    token: str = Depends(oauth2_scheme),
+):
+
+    payload = decode_token(token)
+
+    if payload is None:
+
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid refresh token",
+        )
+
+    if payload.get("type") != "refresh":
+
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid refresh token",
+        )
+
+    return {
+        "user_id": payload.get("user_id"),
+        "username": payload.get("sub"),
+        "role": payload.get("role"),
     }

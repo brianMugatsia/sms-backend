@@ -1,48 +1,55 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
-from typing import Dict, List, Optional
-from app import auth
-import logging
 import json
-import uuid
+import logging
+from typing import Dict, List, Optional
+
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+
+from app import auth
 
 router = APIRouter()
+
 logger = logging.getLogger("sms_backend")
 
 
 class ConnectionManager:
+
     def __init__(self):
         self.active_connections: List[WebSocket] = []
         self.connection_roles: Dict[WebSocket, str] = {}
-        self.connection_ids: Dict[WebSocket, str] = {}
 
-    async def connect(self, websocket: WebSocket, role: str):
+    async def connect(
+        self,
+        websocket: WebSocket,
+        role: str,
+    ):
+
         await websocket.accept()
 
-        connection_id = str(uuid.uuid4())[:8]
-
         self.active_connections.append(websocket)
+
         self.connection_roles[websocket] = role
-        self.connection_ids[websocket] = connection_id
 
         logger.info(
-            "[WS %s] Connected role=%s total=%d",
-            connection_id,
+            "WebSocket connected (%s). Total=%d",
             role,
             len(self.active_connections),
         )
 
-    def disconnect(self, websocket: WebSocket):
-        connection_id = self.connection_ids.get(websocket, "unknown")
+    def disconnect(
+        self,
+        websocket: WebSocket,
+    ):
 
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
 
-        self.connection_roles.pop(websocket, None)
-        self.connection_ids.pop(websocket, None)
+        self.connection_roles.pop(
+            websocket,
+            None,
+        )
 
         logger.info(
-            "[WS %s] Disconnected total=%d",
-            connection_id,
+            "WebSocket disconnected. Total=%d",
             len(self.active_connections),
         )
 
@@ -54,24 +61,19 @@ class ConnectionManager:
 
         dead_connections = []
 
-        logger.info(
-            "Broadcasting to %d clients",
-            len(self.active_connections),
-        )
-
-        for connection in list(self.active_connections):
+        for connection in self.active_connections:
 
             try:
 
                 if (
                     role is None
-                    or self.connection_roles.get(connection) == role
+                    or self.connection_roles.get(connection)
+                    == role
                 ):
+
                     await connection.send_json(message)
 
-            except Exception as e:
-
-                logger.error("Broadcast failed: %s", e)
+            except Exception:
 
                 dead_connections.append(connection)
 
@@ -88,7 +90,7 @@ async def sms_websocket(
     token: Optional[str] = Query(None),
 ):
 
-    if not token:
+    if token is None:
 
         await websocket.accept()
 
@@ -103,9 +105,9 @@ async def sms_websocket(
 
         return
 
-    payload = auth.decode_access_token(token)
+    payload = auth.decode_token(token)
 
-    if not payload:
+    if payload is None:
 
         await websocket.accept()
 
@@ -122,7 +124,10 @@ async def sms_websocket(
 
     role = payload.get("role", "user")
 
-    await manager.connect(websocket, role)
+    await manager.connect(
+        websocket,
+        role,
+    )
 
     try:
 
@@ -131,9 +136,11 @@ async def sms_websocket(
             data = await websocket.receive_text()
 
             try:
+
                 message = json.loads(data)
 
             except Exception:
+
                 message = {
                     "type": "raw",
                     "data": data,
@@ -162,6 +169,6 @@ async def sms_websocket(
 
     except Exception as e:
 
-        logger.exception("WebSocket error: %s", e)
+        logger.exception(e)
 
         manager.disconnect(websocket)

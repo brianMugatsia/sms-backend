@@ -1,207 +1,37 @@
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import OAuth2PasswordBearer
+from typing import Optional
+import logging
 
-from app import auth, models
-from app.config import (
-    EXTERNAL_ENDPOINT,
-    EXTERNAL_TIMEOUT,
-    SERVICE_NAME,
-    SERVICE_VERSION,
-)
-from app.idempotency import processed_sms
+import requests
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
+
+from app import auth, crud, schemas
+from app.config import EXTERNAL_ENDPOINT, EXTERNAL_TIMEOUT
+from app.database import get_db
 from app.websocket import manager
 
-import logging
-import os
-import pytz
-import requests
-
 router = APIRouter()
+
 logger = logging.getLogger("sms_backend")
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/users/login")
-
-nairobi_tz = pytz.timezone("Africa/Nairobi")
-
-# Reuse HTTP connections
 session = requests.Session()
 
 
-def get_current_user(token: str = Depends(oauth2_scheme)):
-    payload = auth.decode_access_token(token)
-
-    if not payload:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid token",
-        )
-
-    return {"username": payload.get("sub")}
 
 
-@router.get("/health")
-async def health():
-    """
-    Used by Android app before uploading queued SMS.
-    """
 
-    return {
-        "status": "healthy",
-        "service": SERVICE_NAME,
-        "version": SERVICE_VERSION,
-    }
+# ==========================================================
+# OPTIONAL EXTERNAL FORWARDING
+# ==========================================================
+def forward_to_external(payload: dict):
 
-
-def send_to_external_endpoint(data: dict):
+    if not EXTERNAL_ENDPOINT:
+        return None
 
     try:
 
         response = session.post(
             EXTERNAL_ENDPOINT,
-            json=data,
-            timeout=EXTERNAL_TIMEOUT,
-        )
-
-        response.raise_for_status()
-
-        external_json = response.json()
-
-        logger.info(
-            "External responseId=%s responseTimeStamp=%s",
-            external_json.get("responseId"),
-            external_json.get("responseTimeStamp"),
-        )
-
-        return external_json
-
-    except requests.exceptions.RequestException as e:
-
-        logger.exception("External endpoint failed")
-
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "error": "External endpoint unavailable",
-                "message": str(e),
-            },
-        )
-
-
-@router.post("/sms/forward")
-async def forward_sms(
-    sms: models.Sms,
-    current_user=Depends(get_current_user),
-):
-
-    logger.info(
-        "[%s] SMS received from %s",
-        sms.id,
-        sms.sender,
-    )
-
-    # -----------------------------
-    # Duplicate protection
-    # -----------------------------
-    if processed_sms.exists(sms.id):
-
-        logger.info(
-            "[%s] Duplicate ignored",
-            sms.id,
-        )
-
-        return {
-            "success": True,
-            "duplicate": True,
-            "id": sms.id,
-        }
-
-    timestamp = (
-        sms.timestamp.astimezone(nairobi_tz).isoformat()
-        if sms.timestamp
-        else None
-    )
-
-    sms_payload = {
-        "id": sms.id,
-        "sender": sms.sender,
-        "message": sms.message,
-        "device_id": sms.device_id,
-        "received_at": sms.received_at,
-        "forwarded_by": current_user["username"],
-        "role": sms.role or "user",
-        "timestamp": timestamp,
-    }
-
-    logger.info(
-        "[%s] Sending to storage server...",
-        sms.id,
-    )
-
-    external_response = send_to_external_endpoint(
-        sms_payload
-    )
-
-    logger.info(
-        "[%s] Storage server accepted SMS",
-        sms.id,
-    )
-
-    processed_sms.add(sms.id)
-
-    broadcast_payload = {
-        "id": sms.id,
-        "sender": sms.sender,
-        "message": sms.message,
-        "device_id": sms.device_id,
-        "received_at": sms.received_at,
-        "forwarded_by": current_user["username"],
-        "role": sms.role or "user",
-        "timestamp": timestamp,
-        "responseId": external_response.get("responseId"),
-        "responseTimeStamp": external_response.get(
-            "responseTimeStamp"
-        ),
-        "statusCode": external_response.get(
-            "responseParam",
-            {},
-        ).get("statusCode"),
-        "description": external_response.get(
-            "responseParam",
-            {},
-        ).get("description"),
-    }
-
-    logger.info(
-        "[%s] Broadcasting to dashboard",
-        sms.id,
-    )
-
-    await manager.broadcast(broadcast_payload)
-
-    logger.info(
-        "[%s] Processing completed",
-        sms.id,
-    )
-
-    return {
-        "success": True,
-        "id": sms.id,
-        "responseId": external_response.get("responseId"),
-        "responseTimeStamp": external_response.get(
-            "responseTimeStamp"
-        ),
-    }
-
-
-@router.get("/sms/list")
-async def list_sms(
-    current_user=Depends(get_current_user),
-):
-
-    try:
-
-        response = session.get(
-            EXTERNAL_ENDPOINT,
+            json=payload,
             timeout=EXTERNAL_TIMEOUT,
         )
 
@@ -209,16 +39,252 @@ async def list_sms(
 
         return response.json()
 
-    except requests.exceptions.RequestException as e:
+    except requests.RequestException:
 
-        logger.exception(
-            "Unable to fetch SMS"
+        logger.exception("External forwarding failed")
+
+        return None
+
+
+# ==========================================================
+# RECEIVE SMS
+# ==========================================================
+@router.post("/sms/forward")
+async def receive_sms(
+    sms: schemas.SmsCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(auth.get_current_user),
+):
+
+    sms_record, duplicate = crud.create_sms(
+        db=db,
+        sms=sms,
+        user_id=current_user["user_id"],
+    )
+
+    if duplicate:
+
+        return {
+            "success": True,
+            "duplicate": True,
+            "sms": sms_record,
+        }
+
+    payload = {
+        "id": sms_record.id,
+        "sender": sms_record.sender,
+        "message": sms_record.message,
+        "device_id": sms_record.device_id,
+        "user_id": sms_record.user_id,
+        "received_at": sms_record.received_at,
+        "timestamp": sms_record.timestamp.isoformat(),
+        "read": sms_record.read,
+    }
+
+    # Broadcast to dashboards
+    await manager.broadcast(payload)
+
+    # Optional external forwarding
+    external_response = forward_to_external(payload)
+
+    return {
+        "success": True,
+        "duplicate": False,
+        "sms": sms_record,
+        "external": external_response,
+    }
+
+
+# ==========================================================
+# SMS LIST
+# ==========================================================
+@router.get(
+    "/sms/list",
+    response_model=schemas.SmsListResponse,
+)
+def list_sms(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=500),
+    search: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(auth.get_current_user),
+):
+
+    return crud.list_sms(
+        db=db,
+        page=page,
+        size=size,
+        user_id=current_user["user_id"],
+        role=current_user["role"],
+        search=search,
+    )
+
+
+# ==========================================================
+# GET SMS
+# ==========================================================
+@router.get(
+    "/sms/{sms_id}",
+    response_model=schemas.SmsResponse,
+)
+def get_sms(
+    sms_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(auth.get_current_user),
+):
+
+    if current_user["role"] == "admin":
+
+        sms = crud.get_sms(
+            db,
+            sms_id,
         )
+
+    else:
+
+        sms = crud.get_user_sms(
+            db,
+            sms_id,
+            current_user["user_id"],
+        )
+
+    if sms is None:
 
         raise HTTPException(
-            status_code=502,
-            detail={
-                "error": "External endpoint unavailable",
-                "message": str(e),
-            },
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SMS not found",
         )
+
+    return sms
+
+
+# ==========================================================
+# DELETE SMS
+# ==========================================================
+@router.delete(
+    "/sms/{sms_id}",
+    response_model=schemas.MessageResponse,
+)
+def delete_sms(
+    sms_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(auth.get_current_user),
+):
+
+    if current_user["role"] == "admin":
+
+        sms = crud.get_sms(
+            db,
+            sms_id,
+        )
+
+    else:
+
+        sms = crud.get_user_sms(
+            db,
+            sms_id,
+            current_user["user_id"],
+        )
+
+    if sms is None:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SMS not found",
+        )
+
+    crud.delete_sms(
+        db,
+        sms_id,
+    )
+
+    return {
+        "success": True,
+        "message": "SMS deleted",
+    }
+
+
+# ==========================================================
+# MARK READ
+# ==========================================================
+@router.put(
+    "/sms/{sms_id}/read",
+    response_model=schemas.SmsResponse,
+)
+def mark_read(
+    sms_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(auth.get_current_user),
+):
+
+    if current_user["role"] != "admin":
+
+        sms = crud.get_user_sms(
+            db,
+            sms_id,
+            current_user["user_id"],
+        )
+
+        if sms is None:
+
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="SMS not found",
+            )
+
+    sms = crud.mark_sms_read(
+        db,
+        sms_id,
+    )
+
+    if sms is None:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SMS not found",
+        )
+
+    return sms
+
+
+# ==========================================================
+# MARK UNREAD
+# ==========================================================
+@router.put(
+    "/sms/{sms_id}/unread",
+    response_model=schemas.SmsResponse,
+)
+def mark_unread(
+    sms_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(auth.get_current_user),
+):
+
+    if current_user["role"] != "admin":
+
+        sms = crud.get_user_sms(
+            db,
+            sms_id,
+            current_user["user_id"],
+        )
+
+        if sms is None:
+
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="SMS not found",
+            )
+
+    sms = crud.mark_sms_unread(
+        db,
+        sms_id,
+    )
+
+    if sms is None:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="SMS not found",
+        )
+
+    return sms
