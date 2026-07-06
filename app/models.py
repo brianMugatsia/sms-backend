@@ -8,6 +8,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    BigInteger,
 )
 
 from sqlalchemy.orm import (
@@ -154,6 +155,7 @@ class SMS(Base):
     )
 
     received_at: Mapped[int] = mapped_column(
+        BigInteger,
         nullable=False,
     )
 
