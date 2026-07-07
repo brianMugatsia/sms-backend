@@ -57,7 +57,28 @@ class User(Base):
         nullable=False,
     )
 
-    endpoint_url: Mapped[str | None] = mapped_column(
+    # ==========================================
+    # USER CONFIGURABLE STORAGE ENDPOINT
+    # ==========================================
+    storage_endpoint: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
+    storage_api_key: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
+    # ==========================================
+    # USER CONFIGURABLE DASHBOARD ENDPOINT
+    # ==========================================
+    dashboard_endpoint: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
+    dashboard_api_key: Mapped[str | None] = mapped_column(
         String(500),
         nullable=True,
     )

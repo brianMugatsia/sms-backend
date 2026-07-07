@@ -5,7 +5,7 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app import auth, crud, schemas
+from app import auth, crud, schemas, models
 from app.config import EXTERNAL_ENDPOINT, EXTERNAL_TIMEOUT
 from app.database import get_db
 from app.websocket import manager
@@ -19,32 +19,45 @@ session = requests.Session()
 
 
 
-# ==========================================================
-# OPTIONAL EXTERNAL FORWARDING
-# ==========================================================
-def forward_to_external(payload: dict):
 
-    if not EXTERNAL_ENDPOINT:
+# FORWARD TO USER STORAGE ENDPOINT
+
+def forward_to_external(
+    user: models.User,
+    payload: dict,
+):
+    endpoint = user.storage_endpoint
+
+    if not endpoint:
+        endpoint = EXTERNAL_ENDPOINT
+
+    if not endpoint:
         return None
 
-    try:
+    headers = {
+        "Content-Type": "application/json",
+    }
 
+    if user.storage_api_key:
+        headers["X-API-Key"] = user.storage_api_key
+    try:
         response = session.post(
-            EXTERNAL_ENDPOINT,
+            endpoint,
             json=payload,
+            headers=headers,
             timeout=EXTERNAL_TIMEOUT,
         )
 
         response.raise_for_status()
 
-        return response.json()
+        try:
+            return response.json()
+        except Exception:
+            return {"status": response.status_code}
 
     except requests.RequestException:
-
         logger.exception("External forwarding failed")
-
         return None
-
 
 # ==========================================================
 # RECEIVE SMS
@@ -61,6 +74,18 @@ async def receive_sms(
         sms=sms,
         user_id=current_user["user_id"],
     )
+
+    user = crud.get_user_by_id(
+        db,
+        current_user["user_id"],
+    )
+     
+    if user is None:
+       raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+    )
+    
 
     if duplicate:
 
@@ -84,9 +109,10 @@ async def receive_sms(
     # Broadcast to dashboards
     await manager.broadcast(payload)
 
-    # Optional external forwarding
-    external_response = forward_to_external(payload)
-
+    external_response = forward_to_external(
+        user=user,
+        payload=payload,
+    )
     return {
         "success": True,
         "duplicate": False,

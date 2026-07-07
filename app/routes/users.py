@@ -22,12 +22,10 @@ def register_user(
     user: schemas.UserCreate,
     db: Session = Depends(get_db),
 ):
-
     try:
         return crud.create_user(db, user)
 
     except ValueError as e:
-
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
@@ -45,7 +43,6 @@ def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-
     user = crud.authenticate_user(
         db,
         form_data.username,
@@ -53,7 +50,6 @@ def login(
     )
 
     if user is None:
-
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -89,13 +85,8 @@ def login(
 # ==========================================================
 @router.post("/users/refresh")
 def refresh_token(
-
-    current_user=Depends(
-        auth.get_current_refresh_user
-    ),
-
+    current_user=Depends(auth.get_current_refresh_user),
 ):
-
     access_token = auth.create_access_token(
         {
             "sub": current_user["username"],
@@ -119,28 +110,83 @@ def refresh_token(
     response_model=schemas.UserResponse,
 )
 def current_user(
-
     db: Session = Depends(get_db),
-
-    token_user=Depends(
-        auth.get_current_user
-    ),
-
+    token_user=Depends(auth.get_current_user),
 ):
-
     user = crud.get_user_by_id(
         db,
         token_user["user_id"],
     )
 
     if user is None:
-
         raise HTTPException(
             status_code=404,
             detail="User not found",
         )
 
     return user
+
+
+# ==========================================================
+# GET USER ENDPOINT SETTINGS
+# ==========================================================
+@router.get(
+    "/users/endpoints",
+    response_model=schemas.EndpointSettings,
+)
+def get_endpoint_settings(
+    db: Session = Depends(get_db),
+    current_user=Depends(auth.get_current_user),
+):
+    user = crud.get_endpoint_settings(
+        db,
+        current_user["user_id"],
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found",
+        )
+
+    return schemas.EndpointSettings(
+        storage_endpoint=user.storage_endpoint,
+        storage_api_key=user.storage_api_key,
+        dashboard_endpoint=user.dashboard_endpoint,
+        dashboard_api_key=user.dashboard_api_key,
+    )
+
+
+# ==========================================================
+# UPDATE USER ENDPOINT SETTINGS
+# ==========================================================
+@router.put(
+    "/users/endpoints",
+    response_model=schemas.EndpointSettings,
+)
+def update_endpoint_settings(
+    settings: schemas.EndpointSettings,
+    db: Session = Depends(get_db),
+    current_user=Depends(auth.get_current_user),
+):
+    user = crud.update_endpoint_settings(
+        db=db,
+        user_id=current_user["user_id"],
+        settings=settings,
+    )
+
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found",
+        )
+
+    return schemas.EndpointSettings(
+        storage_endpoint=user.storage_endpoint,
+        storage_api_key=user.storage_api_key,
+        dashboard_endpoint=user.dashboard_endpoint,
+        dashboard_api_key=user.dashboard_api_key,
+    )
 
 
 # ==========================================================
@@ -154,9 +200,7 @@ def list_users(
     db: Session = Depends(get_db),
     current_user=Depends(auth.get_current_user),
 ):
-
     if current_user["role"] != "admin":
-
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied",

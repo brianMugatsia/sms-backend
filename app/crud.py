@@ -67,14 +67,19 @@ def create_user(
         raise ValueError("Email already exists")
 
     db_user = models.User(
-        username=user.username,
-        email=user.email,
-        hashed_password=auth.get_password_hash(
-            user.password
-        ),
-        role=user.role,
-        endpoint_url=user.endpoint_url,
-    )
+    username=user.username,
+    email=user.email,
+    hashed_password=auth.get_password_hash(
+        user.password
+    ),
+    role=user.role,
+
+    storage_endpoint=None,
+    storage_api_key=None,
+
+    dashboard_endpoint=None,
+    dashboard_api_key=None,
+)
 
     db.add(db_user)
 
@@ -104,6 +109,45 @@ def authenticate_user(
         user.hashed_password,
     ):
         return None
+
+    return user
+
+# ==========================================================
+# ENDPOINT SETTINGS
+# ==========================================================
+def get_endpoint_settings(
+    db: Session,
+    user_id: int,
+):
+    return (
+        db.query(models.User)
+        .filter(models.User.id == user_id)
+        .first()
+    )
+
+
+def update_endpoint_settings(
+    db: Session,
+    user_id: int,
+    settings: schemas.EndpointSettings,
+):
+    user = (
+        db.query(models.User)
+        .filter(models.User.id == user_id)
+        .first()
+    )
+
+    if user is None:
+        return None
+
+    user.storage_endpoint = settings.storage_endpoint
+    user.storage_api_key = settings.storage_api_key
+
+    user.dashboard_endpoint = settings.dashboard_endpoint
+    user.dashboard_api_key = settings.dashboard_api_key
+
+    db.commit()
+    db.refresh(user)
 
     return user
 

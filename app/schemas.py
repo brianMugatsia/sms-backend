@@ -36,9 +36,8 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str
     role: str = "user"
-    endpoint_url: Optional[str] = None
 
-
+    
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -46,11 +45,19 @@ class UserResponse(BaseModel):
     username: str
     email: EmailStr
     role: str
-    endpoint_url: Optional[str]
+
+    storage_endpoint: Optional[str]
+    dashboard_endpoint: Optional[str]
+
     created_at: datetime
     updated_at: datetime
 
+class EndpointSettings(BaseModel):
+    storage_endpoint: Optional[str] = None
+    storage_api_key: Optional[str] = None
 
+    dashboard_endpoint: Optional[str] = None
+    dashboard_api_key: Optional[str] = None
 # ==========================================================
 # DEVICES
 # ==========================================================
@@ -150,3 +157,4 @@ class DuplicateSmsResponse(BaseModel):
     success: bool
     duplicate: bool
     sms: SmsResponse
+
