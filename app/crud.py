@@ -1,212 +1,151 @@
-from datetime import datetime
 from math import ceil
 from typing import Optional
 
-from sqlalchemy import or_
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import auth, models, schemas
+from app import models, schemas
 
 
 # ==========================================================
-# USERS
+# SETTINGS
 # ==========================================================
-def get_user_by_id(
-    db: Session,
-    user_id: int,
-):
-    return (
-        db.query(models.User)
-        .filter(models.User.id == user_id)
+
+def get_settings(db: Session):
+
+    settings = (
+        db.query(models.InstanceSettings)
+        .filter(models.InstanceSettings.id == 1)
         .first()
     )
 
+    if settings is None:
 
-def get_user_by_username(
+        settings = models.InstanceSettings(
+            id=1,
+        )
+
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+
+    return settings
+
+
+def update_settings(
     db: Session,
-    username: str,
-):
-    return (
-        db.query(models.User)
-        .filter(models.User.username == username)
-        .first()
-    )
-
-
-def get_user_by_email(
-    db: Session,
-    email: str,
-):
-    return (
-        db.query(models.User)
-        .filter(models.User.email == email)
-        .first()
-    )
-
-
-def get_users(
-    db: Session,
-):
-    return (
-        db.query(models.User)
-        .order_by(models.User.username)
-        .all()
-    )
-
-
-def create_user(
-    db: Session,
-    user: schemas.UserCreate,
-):
-
-    if get_user_by_username(db, user.username):
-        raise ValueError("Username already exists")
-
-    if get_user_by_email(db, user.email):
-        raise ValueError("Email already exists")
-
-    db_user = models.User(
-    username=user.username,
-    email=user.email,
-    hashed_password=auth.get_password_hash(
-        user.password
-    ),
-    role=user.role,
-
-    storage_endpoint=None,
-    storage_api_key=None,
-
-    dashboard_endpoint=None,
-    dashboard_api_key=None,
-)
-
-    db.add(db_user)
-
-    db.commit()
-
-    db.refresh(db_user)
-
-    return db_user
-
-
-def authenticate_user(
-    db: Session,
-    username: str,
-    password: str,
-):
-
-    user = get_user_by_username(
-        db,
-        username,
-    )
-
-    if user is None:
-        return None
-
-    if not auth.verify_password(
-        password,
-        user.hashed_password,
-    ):
-        return None
-
-    return user
-
-# ==========================================================
-# ENDPOINT SETTINGS
-# ==========================================================
-def get_endpoint_settings(
-    db: Session,
-    user_id: int,
-):
-    return (
-        db.query(models.User)
-        .filter(models.User.id == user_id)
-        .first()
-    )
-
-
-def update_endpoint_settings(
-    db: Session,
-    user_id: int,
     settings: schemas.EndpointSettings,
 ):
-    user = (
-        db.query(models.User)
-        .filter(models.User.id == user_id)
+
+    instance = get_settings(db)
+
+    instance.storage_endpoint = settings.storage_endpoint
+    instance.storage_api_key = settings.storage_api_key
+
+    db.commit()
+    db.refresh(instance)
+
+    return instance
+
+
+# ==========================================================
+# CREATE SMS CACHE
+# ==========================================================
+
+def create_sms(
+    db: Session,
+    sms: schemas.SmsCreate,
+):
+
+    existing = (
+        db.query(models.SMS)
+        .filter(models.SMS.id == sms.id)
         .first()
     )
 
-    if user is None:
+    if existing:
+        return existing, True
+
+    sms_record = models.SMS(
+        id=sms.id,
+        sender=sms.sender,
+        message=sms.message,
+        device_id=sms.device_id,
+        received_at=sms.received_at,
+        status="pending",
+        forwarded=False,
+    )
+
+    db.add(sms_record)
+    db.commit()
+    db.refresh(sms_record)
+
+    return sms_record, False
+
+
+# ==========================================================
+# UPDATE SUCCESS
+# ==========================================================
+
+def mark_success(
+    db: Session,
+    sms_id: str,
+    response_code: int,
+):
+
+    sms = (
+        db.query(models.SMS)
+        .filter(models.SMS.id == sms_id)
+        .first()
+    )
+
+    if sms is None:
         return None
 
-    user.storage_endpoint = settings.storage_endpoint
-    user.storage_api_key = settings.storage_api_key
-
-    user.dashboard_endpoint = settings.dashboard_endpoint
-    user.dashboard_api_key = settings.dashboard_api_key
+    sms.status = "success"
+    sms.forwarded = True
+    sms.response_code = response_code
+    sms.error = None
 
     db.commit()
-    db.refresh(user)
+    db.refresh(sms)
 
-    return user
+    return sms
 
 
 # ==========================================================
-# DEVICES
+# UPDATE FAILED
 # ==========================================================
-def get_device(
+
+def mark_failed(
     db: Session,
-    device_id: str,
+    sms_id: str,
+    error: str,
 ):
 
-    return (
-        db.query(models.Device)
-        .filter(
-            models.Device.device_id == device_id
-        )
+    sms = (
+        db.query(models.SMS)
+        .filter(models.SMS.id == sms_id)
         .first()
     )
 
+    if sms is None:
+        return None
 
-def register_device(
-    db: Session,
-    device_id: str,
-):
-
-    device = get_device(
-        db,
-        device_id,
-    )
-
-    if device:
-
-        device.last_seen = datetime.utcnow()
-
-        db.commit()
-
-        db.refresh(device)
-
-        return device
-
-    device = models.Device(
-        device_id=device_id,
-        last_seen=datetime.utcnow(),
-    )
-
-    db.add(device)
+    sms.status = "failed"
+    sms.forwarded = False
+    sms.error = error
 
     db.commit()
+    db.refresh(sms)
 
-    db.refresh(device)
-
-    return device
+    return sms
 
 
 # ==========================================================
-# SMS
+# GET SMS
 # ==========================================================
-def sms_exists(
+
+def get_sms(
     db: Session,
     sms_id: str,
 ):
@@ -218,123 +157,30 @@ def sms_exists(
     )
 
 
-def create_sms(
-    db: Session,
-    sms: schemas.SmsCreate,
-    user_id: int,
-):
-
-    existing = sms_exists(
-        db,
-        sms.id,
-    )
-
-    if existing:
-        return existing, True
-
-    register_device(
-        db,
-        sms.device_id,
-    )
-
-    db_sms = models.SMS(
-        id=sms.id,
-        sender=sms.sender,
-        message=sms.message,
-        device_id=sms.device_id,
-        user_id=user_id,
-        received_at=sms.received_at,
-        timestamp=datetime.utcnow(),
-        read=False,
-    )
-
-    db.add(db_sms)
-
-    try:
-
-        db.commit()
-
-        db.refresh(db_sms)
-
-    except IntegrityError:
-
-        db.rollback()
-
-        existing = sms_exists(
-            db,
-            sms.id,
-        )
-
-        if existing:
-            return existing, True
-
-        raise
-
-    return db_sms, False
-
-
-def get_sms(
-    db: Session,
-    sms_id: str,
-):
-
-    return (
-        db.query(models.SMS)
-        .filter(
-            models.SMS.id == sms_id
-        )
-        .first()
-    )
-
-
-def get_user_sms(
-    db: Session,
-    sms_id: str,
-    user_id: int,
-):
-
-    return (
-        db.query(models.SMS)
-        .filter(
-            models.SMS.id == sms_id,
-            models.SMS.user_id == user_id,
-        )
-        .first()
-    )
 # ==========================================================
-# SMS LIST
+# LIST SMS
 # ==========================================================
+
 def list_sms(
     db: Session,
-    page: int,
-    size: int,
-    user_id: int,
-    role: str,
+    page: int = 1,
+    size: int = 50,
     search: Optional[str] = None,
 ):
 
     query = db.query(models.SMS)
 
-    # Admins see everything
-    if role != "admin":
-        query = query.filter(
-            models.SMS.user_id == user_id
-        )
-
-    # Search sender or message
     if search:
-        search = search.strip()
 
         query = query.filter(
-            or_(
-                models.SMS.sender.ilike(f"%{search}%"),
-                models.SMS.message.ilike(f"%{search}%"),
-            )
+            (models.SMS.sender.ilike(f"%{search}%"))
+            |
+            (models.SMS.message.ilike(f"%{search}%"))
         )
 
     total = query.count()
 
-    pages = max(1, ceil(total / size))
+    pages = ceil(total / size) if total else 1
 
     items = (
         query.order_by(models.SMS.timestamp.desc())
@@ -357,189 +203,63 @@ def list_sms(
 # ==========================================================
 # DELETE SMS
 # ==========================================================
+
 def delete_sms(
     db: Session,
     sms_id: str,
 ):
 
-    sms = get_sms(
-        db,
-        sms_id,
-    )
+    sms = get_sms(db, sms_id)
 
     if sms is None:
-        return None
+        return False
 
     db.delete(sms)
+    db.commit()
+
+    return True
+
+
+# ==========================================================
+# CLEAR CACHE
+# ==========================================================
+
+def clear_cache(db: Session):
+
+    db.query(models.SMS).delete()
 
     db.commit()
 
-    return sms
+    return True
 
 
 # ==========================================================
-# MARK READ
+# COUNTS
 # ==========================================================
-def mark_sms_read(
-    db: Session,
-    sms_id: str,
-):
 
-    sms = get_sms(
-        db,
-        sms_id,
-    )
+def dashboard_stats(db: Session):
 
-    if sms is None:
-        return None
-
-    if sms.read:
-        return sms
-
-    sms.read = True
-
-    db.commit()
-
-    db.refresh(sms)
-
-    return sms
-
-
-# ==========================================================
-# MARK UNREAD
-# ==========================================================
-def mark_sms_unread(
-    db: Session,
-    sms_id: str,
-):
-
-    sms = get_sms(
-        db,
-        sms_id,
-    )
-
-    if sms is None:
-        return None
-
-    if not sms.read:
-        return sms
-
-    sms.read = False
-
-    db.commit()
-
-    db.refresh(sms)
-
-    return sms
-
-
-# ==========================================================
-# USER SMS COUNT
-# ==========================================================
-def get_user_sms_count(
-    db: Session,
-    user_id: int,
-):
-
-    return (
+    pending = (
         db.query(models.SMS)
-        .filter(
-            models.SMS.user_id == user_id
-        )
+        .filter(models.SMS.status == "pending")
         .count()
     )
 
-
-# ==========================================================
-# TOTAL SMS COUNT
-# ==========================================================
-def get_total_sms_count(
-    db: Session,
-):
-
-    return (
+    success = (
         db.query(models.SMS)
+        .filter(models.SMS.status == "success")
         .count()
     )
 
-
-# ==========================================================
-# UNREAD SMS COUNT
-# ==========================================================
-def get_unread_sms_count(
-    db: Session,
-    user_id: Optional[int] = None,
-):
-
-    query = db.query(models.SMS).filter(
-        models.SMS.read.is_(False)
-    )
-
-    if user_id is not None:
-        query = query.filter(
-            models.SMS.user_id == user_id
-        )
-
-    return query.count()
-
-
-# ==========================================================
-# USER READ SMS COUNT
-# ==========================================================
-def get_read_sms_count(
-    db: Session,
-    user_id: Optional[int] = None,
-):
-
-    query = db.query(models.SMS).filter(
-        models.SMS.read.is_(True)
-    )
-
-    if user_id is not None:
-        query = query.filter(
-            models.SMS.user_id == user_id
-        )
-
-    return query.count()
-
-
-# ==========================================================
-# DELETE ALL USER SMS
-# ==========================================================
-def delete_all_user_sms(
-    db: Session,
-    user_id: int,
-):
-
-    deleted = (
+    failed = (
         db.query(models.SMS)
-        .filter(
-            models.SMS.user_id == user_id
-        )
-        .delete(
-            synchronize_session=False
-        )
+        .filter(models.SMS.status == "failed")
+        .count()
     )
 
-    db.commit()
-
-    return deleted
-
-
-# ==========================================================
-# DELETE ALL SMS (ADMIN)
-# ==========================================================
-def delete_all_sms(
-    db: Session,
-):
-
-    deleted = (
-        db.query(models.SMS)
-        .delete(
-            synchronize_session=False
-        )
-    )
-
-    db.commit()
-
-    return deleted
+    return {
+        "pending": pending,
+        "success": success,
+        "failed": failed,
+        "total": pending + success + failed,
+    }

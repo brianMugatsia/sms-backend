@@ -1,12 +1,13 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict
 
 
 # ==========================================================
 # HEALTH
 # ==========================================================
+
 class HealthResponse(BaseModel):
     status: str
     service: str
@@ -14,66 +15,18 @@ class HealthResponse(BaseModel):
 
 
 # ==========================================================
-# AUTH
+# SETTINGS
 # ==========================================================
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-    expires_in: int
-
-
-# ==========================================================
-# USERS
-# ==========================================================
-class UserCreate(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
-    role: str = "user"
-
-    
-class UserResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    username: str
-    email: EmailStr
-    role: str
-
-    storage_endpoint: Optional[str]
-    dashboard_endpoint: Optional[str]
-
-    created_at: datetime
-    updated_at: datetime
 
 class EndpointSettings(BaseModel):
     storage_endpoint: Optional[str] = None
     storage_api_key: Optional[str] = None
 
-    dashboard_endpoint: Optional[str] = None
-    dashboard_api_key: Optional[str] = None
-# ==========================================================
-# DEVICES
-# ==========================================================
-class DeviceResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    device_id: str
-    device_name: Optional[str]
-    last_seen: datetime
-    created_at: datetime
-
 
 # ==========================================================
-# SMS CREATE
+# SMS RECEIVED FROM PHONE
 # ==========================================================
+
 class SmsCreate(BaseModel):
     id: str
     sender: str
@@ -83,8 +36,9 @@ class SmsCreate(BaseModel):
 
 
 # ==========================================================
-# SMS RESPONSE
+# SMS CACHE RESPONSE
 # ==========================================================
+
 class SmsResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -92,24 +46,22 @@ class SmsResponse(BaseModel):
     sender: str
     message: str
     device_id: str
-    user_id: int
 
     received_at: int
     timestamp: datetime
 
-    read: bool
+    # Dashboard status
+    status: str
+    forwarded: bool
 
-
-# ==========================================================
-# SMS UPDATE
-# ==========================================================
-class SmsUpdate(BaseModel):
-    read: bool
+    response_code: Optional[int] = None
+    error: Optional[str] = None
 
 
 # ==========================================================
 # PAGINATION
 # ==========================================================
+
 class Pagination(BaseModel):
     page: int
     size: int
@@ -118,8 +70,9 @@ class Pagination(BaseModel):
 
 
 # ==========================================================
-# SMS LIST RESPONSE
+# SMS LIST
 # ==========================================================
+
 class SmsListResponse(BaseModel):
     items: list[SmsResponse]
     pagination: Pagination
@@ -128,33 +81,27 @@ class SmsListResponse(BaseModel):
 # ==========================================================
 # WEBSOCKET MESSAGE
 # ==========================================================
+
 class BroadcastSms(BaseModel):
     id: str
     sender: str
     message: str
     device_id: str
 
-    user_id: int
-
     received_at: int
     timestamp: datetime
 
-    read: bool
+    status: str
+    forwarded: bool
+
+    response_code: Optional[int] = None
+    error: Optional[str] = None
 
 
 # ==========================================================
-# SIMPLE MESSAGE
+# SIMPLE RESPONSE
 # ==========================================================
+
 class MessageResponse(BaseModel):
     success: bool
     message: str
-
-
-# ==========================================================
-# DUPLICATE RESPONSE
-# ==========================================================
-class DuplicateSmsResponse(BaseModel):
-    success: bool
-    duplicate: bool
-    sms: SmsResponse
-

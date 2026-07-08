@@ -2,11 +2,11 @@ from typing import Optional
 import logging
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app import auth, crud, schemas, models
-from app.config import EXTERNAL_ENDPOINT, EXTERNAL_TIMEOUT
+from app import crud, schemas
+from app.config import EXTERNAL_TIMEOUT
 from app.database import get_db
 from app.websocket import manager
 
@@ -16,89 +16,55 @@ logger = logging.getLogger("sms_backend")
 session = requests.Session()
 
 
+# ==========================================================
+# FORWARD SMS
+# ==========================================================
 
+def forward_sms(endpoint, api_key, payload):
 
-
-
-# FORWARD TO USER STORAGE ENDPOINT
-
-def forward_to_external(user: models.User, payload: dict):
-    endpoint = (user.storage_endpoint or "").strip()
-
-    if not endpoint:
-        endpoint = EXTERNAL_ENDPOINT
-
-    if not endpoint:
-        logger.warning("No forwarding endpoint configured.")
-        return None
-    logger.info(f"User endpoint: {user.storage_endpoint}")
-    logger.info(f"Default endpoint: {EXTERNAL_ENDPOINT}")
-    logger.info(f"Selected endpoint: {endpoint}")
     headers = {
         "Content-Type": "application/json",
     }
 
-    if user.storage_api_key:
-        headers["X-API-Key"] = user.storage_api_key
+    if api_key:
+        headers["X-API-Key"] = api_key
 
-    logger.info(f"Using endpoint: {endpoint}")
+    response = session.post(
+        endpoint,
+        json=payload,
+        headers=headers,
+        timeout=EXTERNAL_TIMEOUT,
+    )
 
-    try:
-        response = session.post(
-            endpoint,
-            json=payload,
-            headers=headers,
-            timeout=EXTERNAL_TIMEOUT,
-        )
+    response.raise_for_status()
 
-        logger.info(f"External response: {response.status_code}")
-        logger.info(f"Status code: {response.status_code}")
-        logger.info(f"Response body: {response.text}")
-        response.raise_for_status()
+    return response
 
-        try:
-            return response.json()
-        except Exception:
-            return {"status": response.status_code}
-
-    except requests.RequestException as e:
-        logger.exception(f"External forwarding failed: {e}")
-        return None
 
 # ==========================================================
 # RECEIVE SMS
 # ==========================================================
+
 @router.post("/sms/forward")
 async def receive_sms(
     sms: schemas.SmsCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(auth.get_current_user),
 ):
+
+    # --------------------------------------------
+    # Save to dashboard cache
+    # --------------------------------------------
 
     sms_record, duplicate = crud.create_sms(
         db=db,
         sms=sms,
-        user_id=current_user["user_id"],
     )
-
-    user = crud.get_user_by_id(
-        db,
-        current_user["user_id"],
-    )
-     
-    if user is None:
-       raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-    )
-    
 
     if duplicate:
 
         return {
             "success": True,
             "duplicate": True,
-            "sms": sms_record,
         }
 
     payload = {
@@ -106,55 +72,102 @@ async def receive_sms(
         "sender": sms_record.sender,
         "message": sms_record.message,
         "device_id": sms_record.device_id,
-        "user_id": sms_record.user_id,
         "received_at": sms_record.received_at,
         "timestamp": sms_record.timestamp.isoformat(),
-        "read": sms_record.read,
+        "status": "pending",
+        "forwarded": False,
+        "response_code": None,
+        "error": None,
     }
 
-    # Broadcast to dashboards
+    # --------------------------------------------
+    # Dashboard immediately sees pending SMS
+    # --------------------------------------------
+
     await manager.broadcast(payload)
 
-    external_response = forward_to_external(
-        user=user,
-        payload=payload,
+    settings = crud.get_settings(db)
+
+    if not settings.storage_endpoint:
+
+        crud.mark_failed(
+            db,
+            sms_record.id,
+            "No endpoint configured",
+        )
+
+        sms = crud.get_sms(db, sms_record.id)
+
+        await manager.broadcast(schemas.SmsResponse.model_validate(sms).model_dump())
+
+        return {
+            "success": False,
+            "message": "No endpoint configured",
+        }
+
+    try:
+
+        response = forward_sms(
+            settings.storage_endpoint,
+            settings.storage_api_key,
+            payload,
+        )
+
+        crud.mark_success(
+            db,
+            sms_record.id,
+            response.status_code,
+        )
+
+    except Exception as e:
+
+        logger.exception(e)
+
+        crud.mark_failed(
+            db,
+            sms_record.id,
+            str(e),
+        )
+
+    sms = crud.get_sms(
+        db,
+        sms_record.id,
     )
-    return {
-        "success": True,
-        "duplicate": False,
-        "sms": sms_record,
-        "external": external_response,
-    }
+
+    await manager.broadcast(
+        schemas.SmsResponse.model_validate(sms).model_dump()
+    )
+
+    return schemas.SmsResponse.model_validate(sms)
 
 
 # ==========================================================
 # SMS LIST
 # ==========================================================
+
 @router.get(
     "/sms/list",
     response_model=schemas.SmsListResponse,
 )
 def list_sms(
-    page: int = Query(1, ge=1),
-    size: int = Query(50, ge=1, le=500),
-    search: Optional[str] = Query(None),
+    page: int = Query(1),
+    size: int = Query(50),
+    search: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user=Depends(auth.get_current_user),
 ):
 
     return crud.list_sms(
-        db=db,
-        page=page,
-        size=size,
-        user_id=current_user["user_id"],
-        role=current_user["role"],
-        search=search,
+        db,
+        page,
+        size,
+        search,
     )
 
 
 # ==========================================================
 # GET SMS
 # ==========================================================
+
 @router.get(
     "/sms/{sms_id}",
     response_model=schemas.SmsResponse,
@@ -162,28 +175,17 @@ def list_sms(
 def get_sms(
     sms_id: str,
     db: Session = Depends(get_db),
-    current_user=Depends(auth.get_current_user),
 ):
 
-    if current_user["role"] == "admin":
-
-        sms = crud.get_sms(
-            db,
-            sms_id,
-        )
-
-    else:
-
-        sms = crud.get_user_sms(
-            db,
-            sms_id,
-            current_user["user_id"],
-        )
+    sms = crud.get_sms(
+        db,
+        sms_id,
+    )
 
     if sms is None:
 
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=404,
             detail="SMS not found",
         )
 
@@ -191,132 +193,56 @@ def get_sms(
 
 
 # ==========================================================
-# DELETE SMS
+# DELETE ONE SMS
 # ==========================================================
+
 @router.delete(
     "/sms/{sms_id}",
-    response_model=schemas.MessageResponse,
 )
 def delete_sms(
     sms_id: str,
     db: Session = Depends(get_db),
-    current_user=Depends(auth.get_current_user),
 ):
 
-    if current_user["role"] == "admin":
-
-        sms = crud.get_sms(
-            db,
-            sms_id,
-        )
-
-    else:
-
-        sms = crud.get_user_sms(
-            db,
-            sms_id,
-            current_user["user_id"],
-        )
-
-    if sms is None:
+    if not crud.delete_sms(
+        db,
+        sms_id,
+    ):
 
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=404,
             detail="SMS not found",
         )
 
-    crud.delete_sms(
-        db,
-        sms_id,
-    )
-
     return {
         "success": True,
-        "message": "SMS deleted",
     }
 
 
 # ==========================================================
-# MARK READ
+# CLEAR CACHE
 # ==========================================================
-@router.put(
-    "/sms/{sms_id}/read",
-    response_model=schemas.SmsResponse,
-)
-def mark_read(
-    sms_id: str,
+
+@router.delete("/sms")
+def clear_sms(
     db: Session = Depends(get_db),
-    current_user=Depends(auth.get_current_user),
 ):
 
-    if current_user["role"] != "admin":
+    crud.clear_cache(db)
 
-        sms = crud.get_user_sms(
-            db,
-            sms_id,
-            current_user["user_id"],
-        )
-
-        if sms is None:
-
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="SMS not found",
-            )
-
-    sms = crud.mark_sms_read(
-        db,
-        sms_id,
-    )
-
-    if sms is None:
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="SMS not found",
-        )
-
-    return sms
+    return {
+        "success": True,
+        "message": "Dashboard cache cleared",
+    }
 
 
 # ==========================================================
-# MARK UNREAD
+# DASHBOARD STATS
 # ==========================================================
-@router.put(
-    "/sms/{sms_id}/unread",
-    response_model=schemas.SmsResponse,
-)
-def mark_unread(
-    sms_id: str,
+
+@router.get("/sms/stats")
+def dashboard_stats(
     db: Session = Depends(get_db),
-    current_user=Depends(auth.get_current_user),
 ):
 
-    if current_user["role"] != "admin":
-
-        sms = crud.get_user_sms(
-            db,
-            sms_id,
-            current_user["user_id"],
-        )
-
-        if sms is None:
-
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="SMS not found",
-            )
-
-    sms = crud.mark_sms_unread(
-        db,
-        sms_id,
-    )
-
-    if sms is None:
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="SMS not found",
-        )
-
-    return sms
+    return crud.dashboard_stats(db)

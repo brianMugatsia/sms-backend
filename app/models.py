@@ -3,8 +3,6 @@ from datetime import datetime
 from sqlalchemy import (
     Boolean,
     DateTime,
-    ForeignKey,
-    Index,
     Integer,
     String,
     Text,
@@ -14,52 +12,25 @@ from sqlalchemy import (
 from sqlalchemy.orm import (
     Mapped,
     mapped_column,
-    relationship,
 )
 
 from app.database import Base
 
 
 # ==========================================================
-# USERS
+# INSTANCE SETTINGS
+# Only one row exists
 # ==========================================================
-class User(Base):
-    __tablename__ = "users"
+
+class InstanceSettings(Base):
+    __tablename__ = "settings"
 
     id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True,
-        autoincrement=True,
+        default=1,
     )
 
-    username: Mapped[str] = mapped_column(
-        String(100),
-        unique=True,
-        index=True,
-        nullable=False,
-    )
-
-    email: Mapped[str] = mapped_column(
-        String(255),
-        unique=True,
-        index=True,
-        nullable=False,
-    )
-
-    hashed_password: Mapped[str] = mapped_column(
-        String(255),
-        nullable=False,
-    )
-
-    role: Mapped[str] = mapped_column(
-        String(20),
-        default="user",
-        nullable=False,
-    )
-
-    # ==========================================
-    # USER CONFIGURABLE STORAGE ENDPOINT
-    # ==========================================
     storage_endpoint: Mapped[str | None] = mapped_column(
         String(500),
         nullable=True,
@@ -70,82 +41,21 @@ class User(Base):
         nullable=True,
     )
 
-    # ==========================================
-    # USER CONFIGURABLE DASHBOARD ENDPOINT
-    # ==========================================
-    dashboard_endpoint: Mapped[str | None] = mapped_column(
-        String(500),
-        nullable=True,
-    )
-
-    dashboard_api_key: Mapped[str | None] = mapped_column(
-        String(500),
-        nullable=True,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-    )
-
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
 
-    sms_messages = relationship(
-        "SMS",
-        back_populates="owner",
-        cascade="all, delete-orphan",
-    )
-
 
 # ==========================================================
-# DEVICES
+# SMS CACHE
+# This is NOT permanent storage.
+# Used only for dashboard display.
 # ==========================================================
-class Device(Base):
-    __tablename__ = "devices"
 
-    id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        autoincrement=True,
-    )
-
-    device_id: Mapped[str] = mapped_column(
-        String(150),
-        unique=True,
-        index=True,
-        nullable=False,
-    )
-
-    device_name: Mapped[str | None] = mapped_column(
-        String(255),
-        nullable=True,
-    )
-
-    last_seen: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-    )
-
-    sms_messages = relationship(
-        "SMS",
-        back_populates="device",
-    )
-
-
-# ==========================================================
-# SMS
-# ==========================================================
 class SMS(Base):
-    __tablename__ = "sms"
+    __tablename__ = "sms_cache"
 
     id: Mapped[str] = mapped_column(
         String(120),
@@ -154,8 +64,8 @@ class SMS(Base):
 
     sender: Mapped[str] = mapped_column(
         String(100),
-        index=True,
         nullable=False,
+        index=True,
     )
 
     message: Mapped[str] = mapped_column(
@@ -164,15 +74,8 @@ class SMS(Base):
     )
 
     device_id: Mapped[str] = mapped_column(
-        ForeignKey("devices.device_id"),
+        String(150),
         nullable=False,
-        index=True,
-    )
-
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"),
-        nullable=False,
-        index=True,
     )
 
     received_at: Mapped[int] = mapped_column(
@@ -186,38 +89,26 @@ class SMS(Base):
         index=True,
     )
 
-    read: Mapped[bool] = mapped_column(
+    # ------------------------------------------------------
+    # Dashboard status
+    # ------------------------------------------------------
+
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="pending",
+    )
+
+    forwarded: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
-        nullable=False,
     )
 
-    owner = relationship(
-        "User",
-        back_populates="sms_messages",
+    response_code: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
     )
 
-    device = relationship(
-        "Device",
-        back_populates="sms_messages",
+    error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
     )
-
-
-# ==========================================================
-# DATABASE INDEXES
-# ==========================================================
-Index(
-    "idx_sms_user_timestamp",
-    SMS.user_id,
-    SMS.timestamp.desc(),
-)
-
-Index(
-    "idx_sms_sender",
-    SMS.sender,
-)
-
-Index(
-    "idx_sms_device",
-    SMS.device_id,
-)
