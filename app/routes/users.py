@@ -3,6 +3,8 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+from fastapi import Request
+
 
 from app import auth, crud, schemas
 from app.database import get_db
@@ -160,26 +162,28 @@ def get_endpoint_settings(
 # ==========================================================
 # UPDATE USER ENDPOINT SETTINGS
 # ==========================================================
+
 @router.put(
     "/users/endpoints",
     response_model=schemas.EndpointSettings,
 )
-def update_endpoint_settings(
+async def update_endpoint_settings(
+    request: Request,
     settings: schemas.EndpointSettings,
     db: Session = Depends(get_db),
     current_user=Depends(auth.get_current_user),
 ):
+    print("========== RAW REQUEST ==========")
+    print(await request.body())
+
+    print("========== PARSED SETTINGS ==========")
+    print(settings.model_dump())
+
     user = crud.update_endpoint_settings(
         db=db,
         user_id=current_user["user_id"],
         settings=settings,
     )
-
-    if user is None:
-        raise HTTPException(
-            status_code=404,
-            detail="User not found",
-        )
 
     return schemas.EndpointSettings(
         storage_endpoint=user.storage_endpoint,
