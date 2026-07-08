@@ -22,24 +22,27 @@ session = requests.Session()
 
 # FORWARD TO USER STORAGE ENDPOINT
 
-def forward_to_external(
-    user: models.User,
-    payload: dict,
-):
-    endpoint = user.storage_endpoint
+def forward_to_external(user: models.User, payload: dict):
+    endpoint = (user.storage_endpoint or "").strip()
 
     if not endpoint:
         endpoint = EXTERNAL_ENDPOINT
 
     if not endpoint:
+        logger.warning("No forwarding endpoint configured.")
         return None
-
+    logger.info(f"User endpoint: {user.storage_endpoint}")
+    logger.info(f"Default endpoint: {EXTERNAL_ENDPOINT}")
+    logger.info(f"Selected endpoint: {endpoint}")
     headers = {
         "Content-Type": "application/json",
     }
 
     if user.storage_api_key:
         headers["X-API-Key"] = user.storage_api_key
+
+    logger.info(f"Using endpoint: {endpoint}")
+
     try:
         response = session.post(
             endpoint,
@@ -48,6 +51,9 @@ def forward_to_external(
             timeout=EXTERNAL_TIMEOUT,
         )
 
+        logger.info(f"External response: {response.status_code}")
+        logger.info(f"Status code: {response.status_code}")
+        logger.info(f"Response body: {response.text}")
         response.raise_for_status()
 
         try:
@@ -55,8 +61,8 @@ def forward_to_external(
         except Exception:
             return {"status": response.status_code}
 
-    except requests.RequestException:
-        logger.exception("External forwarding failed")
+    except requests.RequestException as e:
+        logger.exception(f"External forwarding failed: {e}")
         return None
 
 # ==========================================================
