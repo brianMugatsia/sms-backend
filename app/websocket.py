@@ -46,15 +46,32 @@ class ConnectionManager:
         message: dict,
     ):
 
+        # Serialize once, with a fallback for any type json.dumps
+        # can't natively handle (datetime, UUID, Decimal, etc).
+        # This guarantees a bad field never crashes send_json and
+        # never gets misread as a dead connection.
+        try:
+            text = json.dumps(message, default=str)
+        except Exception:
+            logger.exception(
+                "Failed to serialize broadcast payload: %r",
+                message,
+            )
+            return
+
         dead_connections = []
 
         for connection in self.active_connections:
 
             try:
 
-                await connection.send_json(message)
+                await connection.send_text(text)
 
             except Exception:
+
+                logger.exception(
+                    "Failed to send to a dashboard connection; dropping it."
+                )
 
                 dead_connections.append(connection)
 

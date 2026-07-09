@@ -98,7 +98,9 @@ async def receive_sms(
 
         sms = crud.get_sms(db, sms_record.id)
 
-        await manager.broadcast(schemas.SmsResponse.model_validate(sms).model_dump())
+        await manager.broadcast(
+            schemas.SmsResponse.model_validate(sms).model_dump(mode="json")
+        )
 
         return {
             "success": False,
@@ -135,7 +137,7 @@ async def receive_sms(
     )
 
     await manager.broadcast(
-        schemas.SmsResponse.model_validate(sms).model_dump()
+        schemas.SmsResponse.model_validate(sms).model_dump(mode="json")
     )
 
     return schemas.SmsResponse.model_validate(sms)
