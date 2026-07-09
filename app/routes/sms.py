@@ -29,11 +29,41 @@ def forward_sms(endpoint, api_key, payload):
     if api_key:
         headers["X-API-Key"] = api_key
 
+    logger.info(
+        "[FORWARD] POST %s | device_id=%s sms_id=%s",
+        endpoint,
+        payload.get("device_id"),
+        payload.get("id"),
+    )
+
+    logger.info(
+        "[FORWARD] Payload: %s",
+        payload,
+    )
+
     response = session.post(
         endpoint,
         json=payload,
         headers=headers,
         timeout=EXTERNAL_TIMEOUT,
+    )
+
+    logger.info(
+        "[FORWARD] Response status=%s | sms_id=%s",
+        response.status_code,
+        payload.get("id"),
+    )
+
+    # Log response body defensively - some endpoints may return
+    # non-text or very large bodies.
+    try:
+        body_preview = response.text[:1000]
+    except Exception:
+        body_preview = "<unreadable response body>"
+
+    logger.info(
+        "[FORWARD] Response body (truncated to 1000 chars): %s",
+        body_preview,
     )
 
     response.raise_for_status()
@@ -51,6 +81,13 @@ async def receive_sms(
     db: Session = Depends(get_db),
 ):
 
+    logger.info(
+        "[RECEIVE] Incoming SMS from device_id=%s sender=%s sms_id=%s",
+        sms.device_id,
+        sms.sender,
+        sms.id,
+    )
+
     # --------------------------------------------
     # Save to dashboard cache
     # --------------------------------------------
@@ -61,6 +98,11 @@ async def receive_sms(
     )
 
     if duplicate:
+
+        logger.info(
+            "[RECEIVE] Duplicate SMS ignored | sms_id=%s",
+            sms.id,
+        )
 
         return {
             "success": True,
@@ -84,11 +126,27 @@ async def receive_sms(
     # Dashboard immediately sees pending SMS
     # --------------------------------------------
 
+    logger.info(
+        "[RECEIVE] Saved SMS as pending | sms_id=%s",
+        sms_record.id,
+    )
+
     await manager.broadcast(payload)
 
     settings = crud.get_settings(db)
 
+    logger.info(
+        "[RECEIVE] Configured storage_endpoint=%s | sms_id=%s",
+        settings.storage_endpoint or "<not configured>",
+        sms_record.id,
+    )
+
     if not settings.storage_endpoint:
+
+        logger.warning(
+            "[RECEIVE] No storage endpoint configured, marking failed | sms_id=%s",
+            sms_record.id,
+        )
 
         crud.mark_failed(
             db,
@@ -115,6 +173,12 @@ async def receive_sms(
             payload,
         )
 
+        logger.info(
+            "[RECEIVE] Forward succeeded | sms_id=%s status_code=%s",
+            sms_record.id,
+            response.status_code,
+        )
+
         crud.mark_success(
             db,
             sms_record.id,
@@ -122,6 +186,13 @@ async def receive_sms(
         )
 
     except Exception as e:
+
+        logger.error(
+            "[RECEIVE] Forward failed | sms_id=%s endpoint=%s error=%s",
+            sms_record.id,
+            settings.storage_endpoint,
+            str(e),
+        )
 
         logger.exception(e)
 
@@ -134,6 +205,14 @@ async def receive_sms(
     sms = crud.get_sms(
         db,
         sms_record.id,
+    )
+
+    logger.info(
+        "[RECEIVE] Final status | sms_id=%s status=%s response_code=%s error=%s",
+        sms.id,
+        sms.status,
+        sms.response_code,
+        sms.error,
     )
 
     await manager.broadcast(
