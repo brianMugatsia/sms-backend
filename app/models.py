@@ -1,4 +1,5 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
     Boolean,
@@ -15,6 +16,12 @@ from sqlalchemy.orm import (
 )
 
 from app.database import Base
+
+NAIROBI_TZ = ZoneInfo("Africa/Nairobi")
+
+
+def nairobi_now() -> datetime:
+    return datetime.now(NAIROBI_TZ)
 
 
 # ==========================================================
@@ -42,9 +49,9 @@ class InstanceSettings(Base):
     )
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        DateTime(timezone=True),
+        default=nairobi_now,
+        onupdate=nairobi_now,
     )
 
 
@@ -84,8 +91,8 @@ class SMS(Base):
     )
 
     timestamp: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=datetime.utcnow,
+        DateTime(timezone=True),
+        default=nairobi_now,
         index=True,
     )
 
