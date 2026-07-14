@@ -5,6 +5,17 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 
+from urllib.parse import urlparse
+
+import requests
+from requests.exceptions import (
+    ConnectionError,
+    InvalidURL,
+    MissingSchema,
+    SSLError,
+    Timeout,
+)
+
 
 # ==========================================================
 # SETTINGS
@@ -46,7 +57,131 @@ def update_settings(
 
     return instance
 
+# ==========================================================
+# TEST STORAGE ENDPOINT
+# ==========================================================
 
+def test_storage_endpoint(
+    endpoint: str,
+    api_key: str | None = None,
+):
+    """
+    Tests whether a storage endpoint is reachable.
+
+    Returns:
+        {
+            "success": bool,
+            "message": str,
+            "status_code": int | None
+        }
+    """
+
+    endpoint = (endpoint or "").strip()
+
+    if not endpoint:
+        return {
+            "success": False,
+            "message": "Storage endpoint is required.",
+            "status_code": None,
+        }
+
+    parsed = urlparse(endpoint)
+
+    if parsed.scheme not in ("http", "https"):
+        return {
+            "success": False,
+            "message": "URL must start with http:// or https://",
+            "status_code": None,
+        }
+
+    headers = {}
+
+    if api_key:
+        headers["X-API-Key"] = api_key
+
+    try:
+        response = requests.post(
+            endpoint,
+            json={"ping": True},
+            headers=headers,
+            timeout=10,
+        )
+
+        if 200 <= response.status_code < 300:
+            return {
+                "success": True,
+                "message": "Connection successful.",
+                "status_code": response.status_code,
+            }
+
+        if response.status_code == 401:
+            return {
+                "success": False,
+                "message": "Authentication failed (401 Unauthorized).",
+                "status_code": response.status_code,
+            }
+
+        if response.status_code == 403:
+            return {
+                "success": False,
+                "message": "Access denied (403 Forbidden).",
+                "status_code": response.status_code,
+            }
+
+        if response.status_code == 404:
+            return {
+                "success": False,
+                "message": "Endpoint not found (404).",
+                "status_code": response.status_code,
+            }
+
+        return {
+            "success": False,
+            "message": f"Endpoint returned HTTP {response.status_code}.",
+            "status_code": response.status_code,
+        }
+
+    except MissingSchema:
+        return {
+            "success": False,
+            "message": "Invalid URL.",
+            "status_code": None,
+        }
+
+    except InvalidURL:
+        return {
+            "success": False,
+            "message": "Invalid URL.",
+            "status_code": None,
+        }
+
+    except Timeout:
+        return {
+            "success": False,
+            "message": "Connection timed out.",
+            "status_code": None,
+        }
+
+    except ConnectionError:
+        return {
+            "success": False,
+            "message": "Unable to connect to the server.",
+            "status_code": None,
+        }
+
+    except SSLError:
+        return {
+            "success": False,
+            "message": "SSL certificate error.",
+            "status_code": None,
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e),
+            "status_code": None,
+        }
 # ==========================================================
 # CREATE SMS CACHE
 # ==========================================================

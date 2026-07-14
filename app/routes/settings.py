@@ -49,3 +49,30 @@ def update_settings(
         storage_endpoint=updated.storage_endpoint,
         storage_api_key=updated.storage_api_key,
     )
+
+
+# ==========================================================
+# TEST STORAGE ENDPOINT
+# ==========================================================
+
+@router.post(
+    "/settings/test",
+    response_model=schemas.EndpointTestResponse,
+)
+def test_storage_endpoint(
+    request: schemas.EndpointTestRequest,
+):
+    """
+    Tests a storage endpoint without saving it.
+    """
+
+    result = crud.test_storage_endpoint(
+        endpoint=request.storage_endpoint,
+        api_key=request.storage_api_key,
+    )
+
+    return schemas.EndpointTestResponse(
+        success=result["success"],
+        message=result["message"],
+        status_code=result["status_code"],
+    )

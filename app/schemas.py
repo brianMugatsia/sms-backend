@@ -105,3 +105,14 @@ class BroadcastSms(BaseModel):
 class MessageResponse(BaseModel):
     success: bool
     message: str
+
+
+class EndpointTestRequest(BaseModel):
+    storage_endpoint: str
+    storage_api_key: Optional[str] = None
+
+
+class EndpointTestResponse(BaseModel):
+    success: bool
+    message: str
+    status_code: Optional[int] = None
