@@ -1,5 +1,6 @@
 from typing import Optional
 import logging
+from datetime import datetime
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -90,12 +91,18 @@ async def receive_sms(
             "duplicate": True,
         }
 
+    # received_at is stored as epoch milliseconds (BigInteger); convert to
+    # ISO string for the outbound payload
+    received_at_iso = datetime.fromtimestamp(
+        sms_record.received_at / 1000
+    ).isoformat()
+
     payload = {
         "id": sms_record.id,
         "sender": sms_record.sender,
         "message": sms_record.message,
         "device_id": sms_record.device_id,
-        "received_at": sms_record.received_at,
+        "received_at": received_at_iso,
         "timestamp": sms_record.timestamp.isoformat(),
         "status": "pending",
         "forwarded": False,
@@ -104,7 +111,7 @@ async def receive_sms(
     }
 
     logger.info("[RECEIVE] Saved SMS as pending | sms_id=%s", sms_record.id)
-    
+
     # Notify connected WebSockets immediately
     await manager.broadcast(payload)
 
@@ -121,7 +128,7 @@ async def receive_sms(
             sms_record.id,
         )
         crud.mark_failed(db, sms_record.id, "No endpoint configured")
-        
+
         updated_sms = crud.get_sms(db, sms_record.id)
         await manager.broadcast(
             schemas.SmsResponse.model_validate(updated_sms).model_dump(mode="json")
