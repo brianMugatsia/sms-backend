@@ -124,6 +124,7 @@ def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
         message=sms.message,
         device_id=sms.device_id,
         received_at=sms.received_at,
+        timestamp=getattr(sms, "timestamp", None) or sms.received_at,
         status="pending",
         forwarded=False,
     )

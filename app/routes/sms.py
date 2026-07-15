@@ -8,6 +8,8 @@ from app import crud, schemas
 from app.config import EXTERNAL_TIMEOUT
 from app.database import get_db
 from app.websocket import manager
+from typing import List 
+
 
 router = APIRouter()
 logger = logging.getLogger("sms_backend")
@@ -186,6 +188,24 @@ def list_sms(
     return crud.list_sms(db, page, size, search)
 
 
+# ==========================================================
+# DASHBOARD REFRESH ALIAS (Returns flat list to match React Native)
+# ==========================================================
+
+@router.get("/sms", response_model=List[schemas.SmsResponse])
+@router.get("/sms/", response_model=List[schemas.SmsResponse], include_in_schema=False)
+def dashboard_refresh_alias(
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=100),
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Fetches paginated dashboard records, but unpacks and returns a 
+    flat array directly so the mobile app's `.map()` loop doesn't break.
+    """
+    data_dict = crud.list_sms(db, page, size, search)
+    return data_dict["items"] # Extracts the list from {"items": [...], "pagination": {...}}
 @router.get("/sms/{sms_id}", response_model=schemas.SmsResponse)
 def get_sms(sms_id: str, db: Session = Depends(get_db)):
     sms = crud.get_sms(db, sms_id)
