@@ -8,8 +8,6 @@ from app import crud, schemas
 from app.config import EXTERNAL_TIMEOUT
 from app.database import get_db
 from app.websocket import manager
-from typing import List 
-
 
 router = APIRouter()
 logger = logging.getLogger("sms_backend")
@@ -189,11 +187,11 @@ def list_sms(
 
 
 # ==========================================================
-# DASHBOARD REFRESH ALIAS (Returns flat list to match React Native)
+# DASHBOARD REFRESH ALIAS (Returns full dictionary wrapper)
 # ==========================================================
 
-@router.get("/sms", response_model=List[schemas.SmsResponse])
-@router.get("/sms/", response_model=List[schemas.SmsResponse], include_in_schema=False)
+@router.get("/sms", response_model=schemas.SmsListResponse)
+@router.get("/sms/", response_model=schemas.SmsListResponse, include_in_schema=False)
 def dashboard_refresh_alias(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=100),
@@ -201,11 +199,12 @@ def dashboard_refresh_alias(
     db: Session = Depends(get_db),
 ):
     """
-    Fetches paginated dashboard records, but unpacks and returns a 
-    flat array directly so the mobile app's `.map()` loop doesn't break.
+    Reroutes base GET requests into the core message pagination query,
+    returning the full schema wrapper containing the "items" array.
     """
-    data_dict = crud.list_sms(db, page, size, search)
-    return data_dict["items"] # Extracts the list from {"items": [...], "pagination": {...}}
+    return crud.list_sms(db, page, size, search)
+
+
 @router.get("/sms/{sms_id}", response_model=schemas.SmsResponse)
 def get_sms(sms_id: str, db: Session = Depends(get_db)):
     sms = crud.get_sms(db, sms_id)
