@@ -23,8 +23,7 @@ from app import models, schemas
 def parse_ms_timestamp(val) -> Optional[str]:
     """
     Safely converts incoming millisecond or second epoch timestamps
-    into a standardized string (YYYY-MM-DD HH:MM:SS) that is safely
-    interpreted by MySQL for both DATETIME and VARCHAR columns.
+    into a standardized string (YYYY-MM-DD HH:MM:SS) for DateTime columns.
     """
     if val is None:
         return None
@@ -33,12 +32,30 @@ def parse_ms_timestamp(val) -> Optional[str]:
         # If the number has 13 or more digits, it's millisecond-based (e.g. JavaScript / Android)
         if len(str(int(val_float))) >= 13:
             val_float = val_float / 1000.0
-        
-        # Convert to standard datetime object and format as string
+
         dt = datetime.fromtimestamp(val_float)
         return dt.strftime('%Y-%m-%d %H:%M:%S')
     except Exception as e:
         logging.error(f"Failed to parse timestamp {val}: {e}")
+        return None
+
+
+def parse_epoch_int(val) -> Optional[int]:
+    """
+    Safely converts incoming epoch timestamps (seconds or milliseconds)
+    into a standardized epoch-milliseconds integer, for BigInteger columns
+    like `received_at`.
+    """
+    if val is None:
+        return None
+    try:
+        val_float = float(val)
+        # Normalize everything to milliseconds
+        if len(str(int(val_float))) < 13:
+            val_float = val_float * 1000.0
+        return int(val_float)
+    except Exception as e:
+        logging.error(f"Failed to parse epoch int {val}: {e}")
         return None
 
 
@@ -146,14 +163,23 @@ def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
     if existing:
         return existing, True
 
-    # Safely unpack and parse the timestamps to prevent database formatting errors
     raw_received = getattr(sms, "received_at", None)
     raw_timestamp = getattr(sms, "timestamp", None) or raw_received
 
-    now_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    now_dt = datetime.utcnow()
+    now_ms = int(now_dt.timestamp() * 1000)
 
-    parsed_received = parse_ms_timestamp(raw_received) or now_str
-    parsed_timestamp = parse_ms_timestamp(raw_timestamp) or parsed_received
+    # received_at is a BigInteger column -> needs an epoch-ms int
+    parsed_received = parse_epoch_int(raw_received)
+    if parsed_received is None:
+        parsed_received = now_ms
+
+    # timestamp is a DateTime column -> needs a real datetime object
+    parsed_timestamp_str = parse_ms_timestamp(raw_timestamp)
+    if parsed_timestamp_str:
+        parsed_timestamp = datetime.strptime(parsed_timestamp_str, '%Y-%m-%d %H:%M:%S')
+    else:
+        parsed_timestamp = now_dt
 
     sms_record = models.SMS(
         id=sms.id,
