@@ -1,6 +1,6 @@
 from datetime import datetime
+from typing import Optional
 from zoneinfo import ZoneInfo
-
 from sqlalchemy import (
     Boolean,
     DateTime,
@@ -9,12 +9,7 @@ from sqlalchemy import (
     Text,
     BigInteger,
 )
-
-from sqlalchemy.orm import (
-    Mapped,
-    mapped_column,
-)
-
+from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
 
 NAIROBI_TZ = ZoneInfo("Africa/Nairobi")
@@ -26,7 +21,7 @@ def nairobi_now() -> datetime:
 
 # ==========================================================
 # INSTANCE SETTINGS
-# Only one row exists
+# Single configuration row table
 # ==========================================================
 
 class InstanceSettings(Base):
@@ -38,12 +33,12 @@ class InstanceSettings(Base):
         default=1,
     )
 
-    storage_endpoint: Mapped[str | None] = mapped_column(
+    storage_endpoint: Mapped[Optional[str]] = mapped_column(
         String(500),
         nullable=True,
     )
 
-    storage_api_key: Mapped[str | None] = mapped_column(
+    storage_api_key: Mapped[Optional[str]] = mapped_column(
         String(500),
         nullable=True,
     )
@@ -57,8 +52,7 @@ class InstanceSettings(Base):
 
 # ==========================================================
 # SMS CACHE
-# This is NOT permanent storage.
-# Used only for dashboard display.
+# Lightweight diagnostic storage for WebSockets & dashboard
 # ==========================================================
 
 class SMS(Base):
@@ -96,10 +90,6 @@ class SMS(Base):
         index=True,
     )
 
-    # ------------------------------------------------------
-    # Dashboard status
-    # ------------------------------------------------------
-
     status: Mapped[str] = mapped_column(
         String(20),
         default="pending",
@@ -110,12 +100,12 @@ class SMS(Base):
         default=False,
     )
 
-    response_code: Mapped[int | None] = mapped_column(
+    response_code: Mapped[Optional[int]] = mapped_column(
         Integer,
         nullable=True,
     )
 
-    error: Mapped[str | None] = mapped_column(
+    error: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
     )

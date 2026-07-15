@@ -1,7 +1,6 @@
 from datetime import datetime
 from typing import Optional
-
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ==========================================================
@@ -19,8 +18,10 @@ class HealthResponse(BaseModel):
 # ==========================================================
 
 class EndpointSettings(BaseModel):
-    storage_endpoint: Optional[str] = None
-    storage_api_key: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+
+    storage_endpoint: Optional[str] = Field(None, max_length=500)
+    storage_api_key: Optional[str] = Field(None, max_length=500)
 
 
 # ==========================================================
@@ -28,10 +29,11 @@ class EndpointSettings(BaseModel):
 # ==========================================================
 
 class SmsCreate(BaseModel):
-    id: str
-    sender: str
+    # Field constraints protect your database from buffer issues/invalid writes
+    id: str = Field(..., min_length=1, max_length=120)
+    sender: str = Field(..., min_length=1, max_length=100)
     message: str
-    device_id: str
+    device_id: str = Field(..., min_length=1, max_length=150)
     received_at: int
 
 
@@ -79,27 +81,15 @@ class SmsListResponse(BaseModel):
 
 
 # ==========================================================
-# WEBSOCKET MESSAGE
+# WEBSOCKET MESSAGE (Inherits from SmsResponse to stay DRY)
 # ==========================================================
 
-class BroadcastSms(BaseModel):
-    id: str
-    sender: str
-    message: str
-    device_id: str
-
-    received_at: int
-    timestamp: datetime
-
-    status: str
-    forwarded: bool
-
-    response_code: Optional[int] = None
-    error: Optional[str] = None
+class BroadcastSms(SmsResponse):
+    pass
 
 
 # ==========================================================
-# SIMPLE RESPONSE
+# SIMPLE RESPONSE / ENDPOINT TESTING
 # ==========================================================
 
 class MessageResponse(BaseModel):
@@ -108,8 +98,8 @@ class MessageResponse(BaseModel):
 
 
 class EndpointTestRequest(BaseModel):
-    storage_endpoint: str
-    storage_api_key: Optional[str] = None
+    storage_endpoint: str = Field(..., min_length=1, max_length=500)
+    storage_api_key: Optional[str] = Field(None, max_length=500)
 
 
 class EndpointTestResponse(BaseModel):

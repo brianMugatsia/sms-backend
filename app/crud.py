@@ -1,12 +1,7 @@
 from math import ceil
 from typing import Optional
-
 from sqlalchemy.orm import Session
-
-from app import models, schemas
-
 from urllib.parse import urlparse
-
 import requests
 from requests.exceptions import (
     ConnectionError,
@@ -16,13 +11,14 @@ from requests.exceptions import (
     Timeout,
 )
 
+from app import models, schemas
+
 
 # ==========================================================
 # SETTINGS
 # ==========================================================
 
-def get_settings(db: Session):
-
+def get_settings(db: Session) -> models.InstanceSettings:
     settings = (
         db.query(models.InstanceSettings)
         .filter(models.InstanceSettings.id == 1)
@@ -30,11 +26,7 @@ def get_settings(db: Session):
     )
 
     if settings is None:
-
-        settings = models.InstanceSettings(
-            id=1,
-        )
-
+        settings = models.InstanceSettings(id=1)
         db.add(settings)
         db.commit()
         db.refresh(settings)
@@ -42,40 +34,20 @@ def get_settings(db: Session):
     return settings
 
 
-def update_settings(
-    db: Session,
-    settings: schemas.EndpointSettings,
-):
-
+def update_settings(db: Session, settings: schemas.EndpointSettings) -> models.InstanceSettings:
     instance = get_settings(db)
-
     instance.storage_endpoint = settings.storage_endpoint
     instance.storage_api_key = settings.storage_api_key
-
     db.commit()
     db.refresh(instance)
-
     return instance
+
 
 # ==========================================================
 # TEST STORAGE ENDPOINT
 # ==========================================================
 
-def test_storage_endpoint(
-    endpoint: str,
-    api_key: str | None = None,
-):
-    """
-    Tests whether a storage endpoint is reachable.
-
-    Returns:
-        {
-            "success": bool,
-            "message": str,
-            "status_code": int | None
-        }
-    """
-
+def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
     endpoint = (endpoint or "").strip()
 
     if not endpoint:
@@ -86,7 +58,6 @@ def test_storage_endpoint(
         }
 
     parsed = urlparse(endpoint)
-
     if parsed.scheme not in ("http", "https"):
         return {
             "success": False,
@@ -94,12 +65,12 @@ def test_storage_endpoint(
             "status_code": None,
         }
 
-    headers = {}
-
+    headers = {"Content-Type": "application/json"}
     if api_key:
         headers["X-API-Key"] = api_key
 
     try:
+        # A lightweight test POST to verify reachability
         response = requests.post(
             endpoint,
             json={"ping": True},
@@ -114,89 +85,36 @@ def test_storage_endpoint(
                 "status_code": response.status_code,
             }
 
-        if response.status_code == 401:
-            return {
-                "success": False,
-                "message": "Authentication failed (401 Unauthorized).",
-                "status_code": response.status_code,
-            }
-
-        if response.status_code == 403:
-            return {
-                "success": False,
-                "message": "Access denied (403 Forbidden).",
-                "status_code": response.status_code,
-            }
-
-        if response.status_code == 404:
-            return {
-                "success": False,
-                "message": "Endpoint not found (404).",
-                "status_code": response.status_code,
-            }
+        status_messages = {
+            401: "Authentication failed (401 Unauthorized).",
+            403: "Access denied (403 Forbidden).",
+            404: "Endpoint not found (404).",
+        }
 
         return {
             "success": False,
-            "message": f"Endpoint returned HTTP {response.status_code}.",
+            "message": status_messages.get(response.status_code, f"Endpoint returned HTTP {response.status_code}."),
             "status_code": response.status_code,
         }
 
-    except MissingSchema:
-        return {
-            "success": False,
-            "message": "Invalid URL.",
-            "status_code": None,
-        }
-
-    except InvalidURL:
-        return {
-            "success": False,
-            "message": "Invalid URL.",
-            "status_code": None,
-        }
-
+    except (MissingSchema, InvalidURL):
+        return {"success": False, "message": "Invalid URL.", "status_code": None}
     except Timeout:
-        return {
-            "success": False,
-            "message": "Connection timed out.",
-            "status_code": None,
-        }
-
+        return {"success": False, "message": "Connection timed out.", "status_code": None}
     except ConnectionError:
-        return {
-            "success": False,
-            "message": "Unable to connect to the server.",
-            "status_code": None,
-        }
-
+        return {"success": False, "message": "Unable to connect to the server.", "status_code": None}
     except SSLError:
-        return {
-            "success": False,
-            "message": "SSL certificate error.",
-            "status_code": None,
-        }
-
+        return {"success": False, "message": "SSL certificate error.", "status_code": None}
     except Exception as e:
-        return {
-            "success": False,
-            "message": str(e),
-            "status_code": None,
-        }
+        return {"success": False, "message": str(e), "status_code": None}
+
+
 # ==========================================================
 # CREATE SMS CACHE
 # ==========================================================
 
-def create_sms(
-    db: Session,
-    sms: schemas.SmsCreate,
-):
-
-    existing = (
-        db.query(models.SMS)
-        .filter(models.SMS.id == sms.id)
-        .first()
-    )
-
+def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
+    existing = db.query(models.SMS).filter(models.SMS.id == sms.id).first()
     if existing:
         return existing, True
 
@@ -213,26 +131,15 @@ def create_sms(
     db.add(sms_record)
     db.commit()
     db.refresh(sms_record)
-
     return sms_record, False
 
 
 # ==========================================================
-# UPDATE SUCCESS
+# STATUS MODIFIERS
 # ==========================================================
 
-def mark_success(
-    db: Session,
-    sms_id: str,
-    response_code: int,
-):
-
-    sms = (
-        db.query(models.SMS)
-        .filter(models.SMS.id == sms_id)
-        .first()
-    )
-
+def mark_success(db: Session, sms_id: str, response_code: int) -> Optional[models.SMS]:
+    sms = db.query(models.SMS).filter(models.SMS.id == sms_id).first()
     if sms is None:
         return None
 
@@ -243,26 +150,11 @@ def mark_success(
 
     db.commit()
     db.refresh(sms)
-
     return sms
 
 
-# ==========================================================
-# UPDATE FAILED
-# ==========================================================
-
-def mark_failed(
-    db: Session,
-    sms_id: str,
-    error: str,
-):
-
-    sms = (
-        db.query(models.SMS)
-        .filter(models.SMS.id == sms_id)
-        .first()
-    )
-
+def mark_failed(db: Session, sms_id: str, error: str) -> Optional[models.SMS]:
+    sms = db.query(models.SMS).filter(models.SMS.id == sms_id).first()
     if sms is None:
         return None
 
@@ -272,51 +164,28 @@ def mark_failed(
 
     db.commit()
     db.refresh(sms)
-
     return sms
 
 
 # ==========================================================
-# GET SMS
+# RETRIEVAL & UTILITIES
 # ==========================================================
 
-def get_sms(
-    db: Session,
-    sms_id: str,
-):
-
-    return (
-        db.query(models.SMS)
-        .filter(models.SMS.id == sms_id)
-        .first()
-    )
+def get_sms(db: Session, sms_id: str) -> Optional[models.SMS]:
+    return db.query(models.SMS).filter(models.SMS.id == sms_id).first()
 
 
-# ==========================================================
-# LIST SMS
-# ==========================================================
-
-def list_sms(
-    db: Session,
-    page: int = 1,
-    size: int = 50,
-    search: Optional[str] = None,
-):
-
+def list_sms(db: Session, page: int = 1, size: int = 50, search: Optional[str] = None) -> dict:
     query = db.query(models.SMS)
 
     if search:
-
         query = query.filter(
             (models.SMS.sender.ilike(f"%{search}%"))
-            |
-            (models.SMS.message.ilike(f"%{search}%"))
+            | (models.SMS.message.ilike(f"%{search}%"))
         )
 
     total = query.count()
-
     pages = ceil(total / size) if total else 1
-
     items = (
         query.order_by(models.SMS.timestamp.desc())
         .offset((page - 1) * size)
@@ -335,62 +204,26 @@ def list_sms(
     }
 
 
-# ==========================================================
-# DELETE SMS
-# ==========================================================
-
-def delete_sms(
-    db: Session,
-    sms_id: str,
-):
-
+def delete_sms(db: Session, sms_id: str) -> bool:
     sms = get_sms(db, sms_id)
-
     if sms is None:
         return False
 
     db.delete(sms)
     db.commit()
-
     return True
 
 
-# ==========================================================
-# CLEAR CACHE
-# ==========================================================
-
-def clear_cache(db: Session):
-
+def clear_cache(db: Session) -> bool:
     db.query(models.SMS).delete()
-
     db.commit()
-
     return True
 
 
-# ==========================================================
-# COUNTS
-# ==========================================================
-
-def dashboard_stats(db: Session):
-
-    pending = (
-        db.query(models.SMS)
-        .filter(models.SMS.status == "pending")
-        .count()
-    )
-
-    success = (
-        db.query(models.SMS)
-        .filter(models.SMS.status == "success")
-        .count()
-    )
-
-    failed = (
-        db.query(models.SMS)
-        .filter(models.SMS.status == "failed")
-        .count()
-    )
+def dashboard_stats(db: Session) -> dict:
+    pending = db.query(models.SMS).filter(models.SMS.status == "pending").count()
+    success = db.query(models.SMS).filter(models.SMS.status == "success").count()
+    failed = db.query(models.SMS).filter(models.SMS.status == "failed").count()
 
     return {
         "pending": pending,
