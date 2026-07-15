@@ -20,10 +20,11 @@ from app import models, schemas
 # UTILS / HELPER FUNCTIONS
 # ==========================================================
 
-def parse_ms_timestamp(val) -> Optional[datetime]:
+def parse_ms_timestamp(val) -> Optional[str]:
     """
     Safely converts incoming millisecond or second epoch timestamps
-    into a native Python datetime object for database compatibility.
+    into a standardized string (YYYY-MM-DD HH:MM:SS) that is safely
+    interpreted by MySQL for both DATETIME and VARCHAR columns.
     """
     if val is None:
         return None
@@ -32,7 +33,10 @@ def parse_ms_timestamp(val) -> Optional[datetime]:
         # If the number has 13 or more digits, it's millisecond-based (e.g. JavaScript / Android)
         if len(str(int(val_float))) >= 13:
             val_float = val_float / 1000.0
-        return datetime.fromtimestamp(val_float)
+        
+        # Convert to standard datetime object and format as string
+        dt = datetime.fromtimestamp(val_float)
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
     except Exception as e:
         logging.error(f"Failed to parse timestamp {val}: {e}")
         return None
@@ -146,7 +150,9 @@ def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
     raw_received = getattr(sms, "received_at", None)
     raw_timestamp = getattr(sms, "timestamp", None) or raw_received
 
-    parsed_received = parse_ms_timestamp(raw_received) or datetime.utcnow()
+    now_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+
+    parsed_received = parse_ms_timestamp(raw_received) or now_str
     parsed_timestamp = parse_ms_timestamp(raw_timestamp) or parsed_received
 
     sms_record = models.SMS(
