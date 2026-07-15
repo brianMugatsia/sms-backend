@@ -1,3 +1,5 @@
+from datetime import datetime
+import logging
 from math import ceil
 from typing import Optional
 from sqlalchemy.orm import Session
@@ -12,6 +14,28 @@ from requests.exceptions import (
 )
 
 from app import models, schemas
+
+
+# ==========================================================
+# UTILS / HELPER FUNCTIONS
+# ==========================================================
+
+def parse_ms_timestamp(val) -> Optional[datetime]:
+    """
+    Safely converts incoming millisecond or second epoch timestamps
+    into a native Python datetime object for database compatibility.
+    """
+    if val is None:
+        return None
+    try:
+        val_float = float(val)
+        # If the number has 13 or more digits, it's millisecond-based (e.g. JavaScript / Android)
+        if len(str(int(val_float))) >= 13:
+            val_float = val_float / 1000.0
+        return datetime.fromtimestamp(val_float)
+    except Exception as e:
+        logging.error(f"Failed to parse timestamp {val}: {e}")
+        return None
 
 
 # ==========================================================
@@ -118,13 +142,20 @@ def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
     if existing:
         return existing, True
 
+    # Safely unpack and parse the timestamps to prevent database formatting errors
+    raw_received = getattr(sms, "received_at", None)
+    raw_timestamp = getattr(sms, "timestamp", None) or raw_received
+
+    parsed_received = parse_ms_timestamp(raw_received) or datetime.utcnow()
+    parsed_timestamp = parse_ms_timestamp(raw_timestamp) or parsed_received
+
     sms_record = models.SMS(
         id=sms.id,
         sender=sms.sender,
         message=sms.message,
         device_id=sms.device_id,
-        received_at=sms.received_at,
-        timestamp=getattr(sms, "timestamp", None) or sms.received_at,
+        received_at=parsed_received,
+        timestamp=parsed_timestamp,
         status="pending",
         forwarded=False,
     )
