@@ -1,6 +1,7 @@
 from datetime import datetime
 import logging
 from math import ceil
+import time
 from typing import Optional
 from sqlalchemy.orm import Session
 from urllib.parse import urlparse
@@ -110,31 +111,77 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
             "status_code": None,
         }
 
+    # Set up request headers
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["X-API-Key"] = api_key
 
+    # 1. Determine payload context dynamically
+    is_unitas = "unitas/payment" in endpoint
+
+    if is_unitas:
+        # Unitas requires validation keys like UUID 'id' and 'received_at'
+        payload = {
+            "id": "00000000-0000-0000-0000-000000000000",  # Dummy UUID
+            "sender": "TEST_PING",
+            "message": "This is a backend test connection",
+            "device_id": "fastapi-backend-test",
+            "received_at": int(time.time() * 1000)
+        }
+    else:
+        # Standard lightweight fallback for general test connections
+        payload = {"ping": True}
+
     try:
-        # A lightweight test POST to verify reachability
         response = requests.post(
             endpoint,
-            json={"ping": True},
+            json=payload,
             headers=headers,
             timeout=10,
         )
 
-        if 200 <= response.status_code < 300:
+        # 2. Try parsing json body to check custom system response states
+        try:
+            res_json = response.json()
+            status_text = res_json.get("status")
+        except Exception:
+            res_json = {}
+            status_text = None
+
+        # Accept standard 200 HTTP statuses, OR valid Unitas engine outcomes
+        is_success = (
+            (200 <= response.status_code < 300) or 
+            status_text in ["success", "duplicate"]
+        )
+
+        if is_success:
+            message = "Connection successful."
+            if status_text == "duplicate":
+                message = "Endpoint verified (Duplicate transaction test caught successfully)."
+            elif res_json.get("message"):
+                message = res_json.get("message")
+
             return {
                 "success": True,
-                "message": "Connection successful.",
+                "message": message,
                 "status_code": response.status_code,
             }
 
+        # 3. Handle failures and custom response catches
         status_messages = {
             401: "Authentication failed (401 Unauthorized).",
             403: "Access denied (403 Forbidden).",
             404: "Endpoint not found (404).",
         }
+
+        # Double check: if Unitas server gave 400 bad request strictly because 
+        # of a duplicate transaction payload, it proves valid connection
+        if status_text in ["success", "duplicate"]:
+            return {
+                "success": True,
+                "message": "Endpoint verified.",
+                "status_code": response.status_code,
+            }
 
         return {
             "success": False,
