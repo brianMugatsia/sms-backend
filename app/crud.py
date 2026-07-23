@@ -30,7 +30,6 @@ def parse_ms_timestamp(val) -> Optional[str]:
         return None
     try:
         val_float = float(val)
-        # If the number has 13 or more digits, it's millisecond-based (e.g. JavaScript / Android)
         if len(str(int(val_float))) >= 13:
             val_float = val_float / 1000.0
 
@@ -51,7 +50,6 @@ def parse_epoch_int(val) -> Optional[int]:
         return None
     try:
         val_float = float(val)
-        # Normalize everything to milliseconds
         if len(str(int(val_float))) < 13:
             val_float = val_float * 1000.0
         return int(val_float)
@@ -111,25 +109,21 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
             "status_code": None,
         }
 
-    # Set up request headers
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["X-API-Key"] = api_key
 
-    # 1. Determine payload context dynamically
     is_unitas = "unitas/payment" in endpoint
 
     if is_unitas:
-        # Unitas requires validation keys like UUID 'id' and 'received_at'
         payload = {
-            "id": "00000000-0000-0000-0000-000000000000",  # Dummy UUID
+            "id": "00000000-0000-0000-0000-000000000000",
             "sender": "TEST_PING",
             "message": "This is a backend test connection",
             "device_id": "fastapi-backend-test",
             "received_at": int(time.time() * 1000)
         }
     else:
-        # Standard lightweight fallback for general test connections
         payload = {"ping": True}
 
     try:
@@ -140,7 +134,6 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
             timeout=10,
         )
 
-        # 2. Try parsing json body to check custom system response states
         try:
             res_json = response.json()
             status_text = res_json.get("status")
@@ -148,9 +141,8 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
             res_json = {}
             status_text = None
 
-        # Accept standard 200 HTTP statuses, OR valid Unitas engine outcomes
         is_success = (
-            (200 <= response.status_code < 300) or 
+            (200 <= response.status_code < 300) or
             status_text in ["success", "duplicate"]
         )
 
@@ -167,15 +159,12 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
                 "status_code": response.status_code,
             }
 
-        # 3. Handle failures and custom response catches
         status_messages = {
             401: "Authentication failed (401 Unauthorized).",
             403: "Access denied (403 Forbidden).",
             404: "Endpoint not found (404).",
         }
 
-        # Double check: if Unitas server gave 400 bad request strictly because 
-        # of a duplicate transaction payload, it proves valid connection
         if status_text in ["success", "duplicate"]:
             return {
                 "success": True,
@@ -216,12 +205,10 @@ def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
     now_dt = datetime.utcnow()
     now_ms = int(now_dt.timestamp() * 1000)
 
-    # received_at is a BigInteger column -> needs an epoch-ms int
     parsed_received = parse_epoch_int(raw_received)
     if parsed_received is None:
         parsed_received = now_ms
 
-    # timestamp is a DateTime column -> needs a real datetime object
     parsed_timestamp_str = parse_ms_timestamp(raw_timestamp)
     if parsed_timestamp_str:
         parsed_timestamp = datetime.strptime(parsed_timestamp_str, '%Y-%m-%d %H:%M:%S')
@@ -279,15 +266,25 @@ def mark_failed(db: Session, sms_id: str, error: str) -> Optional[models.SMS]:
 
 
 # ==========================================================
-# RETRIEVAL & UTILITIES
+# RETRIEVAL & UTILITIES (now scoped by device_id)
 # ==========================================================
 
-def get_sms(db: Session, sms_id: str) -> Optional[models.SMS]:
-    return db.query(models.SMS).filter(models.SMS.id == sms_id).first()
+def get_sms(db: Session, sms_id: str, device_id: str) -> Optional[models.SMS]:
+    return (
+        db.query(models.SMS)
+        .filter(models.SMS.id == sms_id, models.SMS.device_id == device_id)
+        .first()
+    )
 
 
-def list_sms(db: Session, page: int = 1, size: int = 50, search: Optional[str] = None) -> dict:
-    query = db.query(models.SMS)
+def list_sms(
+    db: Session,
+    device_id: str,
+    page: int = 1,
+    size: int = 50,
+    search: Optional[str] = None,
+) -> dict:
+    query = db.query(models.SMS).filter(models.SMS.device_id == device_id)
 
     if search:
         query = query.filter(
@@ -315,8 +312,8 @@ def list_sms(db: Session, page: int = 1, size: int = 50, search: Optional[str] =
     }
 
 
-def delete_sms(db: Session, sms_id: str) -> bool:
-    sms = get_sms(db, sms_id)
+def delete_sms(db: Session, sms_id: str, device_id: str) -> bool:
+    sms = get_sms(db, sms_id, device_id)
     if sms is None:
         return False
 
@@ -325,16 +322,20 @@ def delete_sms(db: Session, sms_id: str) -> bool:
     return True
 
 
-def clear_cache(db: Session) -> bool:
-    db.query(models.SMS).delete()
+def clear_cache(db: Session, device_id: str) -> bool:
+    # Scoped to one device only — a single dashboard clearing its own
+    # history should never wipe every other user's messages.
+    db.query(models.SMS).filter(models.SMS.device_id == device_id).delete()
     db.commit()
     return True
 
 
-def dashboard_stats(db: Session) -> dict:
-    pending = db.query(models.SMS).filter(models.SMS.status == "pending").count()
-    success = db.query(models.SMS).filter(models.SMS.status == "success").count()
-    failed = db.query(models.SMS).filter(models.SMS.status == "failed").count()
+def dashboard_stats(db: Session, device_id: str) -> dict:
+    base = db.query(models.SMS).filter(models.SMS.device_id == device_id)
+
+    pending = base.filter(models.SMS.status == "pending").count()
+    success = base.filter(models.SMS.status == "success").count()
+    failed = base.filter(models.SMS.status == "failed").count()
 
     return {
         "pending": pending,

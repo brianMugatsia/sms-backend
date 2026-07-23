@@ -1,8 +1,8 @@
 import json
 import logging
-from typing import List
+from typing import Dict, List
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
 router = APIRouter()
 
@@ -12,44 +12,56 @@ logger = logging.getLogger("sms_backend")
 class ConnectionManager:
 
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        # Connections are now grouped by device_id instead of one flat list,
+        # so a broadcast can be scoped to a single device's dashboard(s).
+        self.active_connections: Dict[str, List[WebSocket]] = {}
 
     async def connect(
         self,
         websocket: WebSocket,
+        device_id: str,
     ):
 
         await websocket.accept()
 
-        self.active_connections.append(websocket)
+        self.active_connections.setdefault(device_id, []).append(websocket)
 
         logger.info(
-            "Dashboard connected. Total=%d",
-            len(self.active_connections),
+            "Dashboard connected. device_id=%s Total=%d",
+            device_id,
+            sum(len(conns) for conns in self.active_connections.values()),
         )
 
     def disconnect(
         self,
         websocket: WebSocket,
+        device_id: str,
     ):
 
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+        conns = self.active_connections.get(device_id, [])
+        if websocket in conns:
+            conns.remove(websocket)
+
+        # Clean up empty device buckets so the dict doesn't grow forever
+        if device_id in self.active_connections and not self.active_connections[device_id]:
+            del self.active_connections[device_id]
 
         logger.info(
-            "Dashboard disconnected. Total=%d",
-            len(self.active_connections),
+            "Dashboard disconnected. device_id=%s Total=%d",
+            device_id,
+            sum(len(conns) for conns in self.active_connections.values()),
         )
 
-    async def broadcast(
+    async def broadcast_to_device(
         self,
+        device_id: str,
         message: dict,
     ):
+        """
+        Sends a message ONLY to dashboards connected under this specific
+        device_id, instead of every connected client.
+        """
 
-        # Serialize once, with a fallback for any type json.dumps
-        # can't natively handle (datetime, UUID, Decimal, etc).
-        # This guarantees a bad field never crashes send_json and
-        # never gets misread as a dead connection.
         try:
             text = json.dumps(message, default=str)
         except Exception:
@@ -61,7 +73,7 @@ class ConnectionManager:
 
         dead_connections = []
 
-        for connection in self.active_connections:
+        for connection in self.active_connections.get(device_id, []):
 
             try:
 
@@ -76,7 +88,7 @@ class ConnectionManager:
                 dead_connections.append(connection)
 
         for connection in dead_connections:
-            self.disconnect(connection)
+            self.disconnect(connection, device_id)
 
 
 manager = ConnectionManager()
@@ -85,9 +97,10 @@ manager = ConnectionManager()
 @router.websocket("/ws/sms")
 async def sms_websocket(
     websocket: WebSocket,
+    device_id: str = Query(...),
 ):
 
-    await manager.connect(websocket)
+    await manager.connect(websocket, device_id)
 
     try:
 
@@ -133,10 +146,10 @@ async def sms_websocket(
 
     except WebSocketDisconnect:
 
-        manager.disconnect(websocket)
+        manager.disconnect(websocket, device_id)
 
     except Exception as e:
 
         logger.exception(e)
 
-        manager.disconnect(websocket)
+        manager.disconnect(websocket, device_id)

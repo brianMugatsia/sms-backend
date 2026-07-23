@@ -13,7 +13,6 @@ from app.websocket import manager
 router = APIRouter()
 logger = logging.getLogger("sms_backend")
 
-# Shared AsyncClient for connection pooling
 async_client = httpx.AsyncClient(timeout=EXTERNAL_TIMEOUT)
 
 
@@ -78,7 +77,6 @@ async def receive_sms(
         sms.id,
     )
 
-    # Save to cache database
     sms_record, duplicate = crud.create_sms(db=db, sms=sms)
 
     if duplicate:
@@ -91,8 +89,6 @@ async def receive_sms(
             "duplicate": True,
         }
 
-    # received_at is stored as epoch milliseconds (BigInteger); convert to
-    # ISO string for the outbound payload
     received_at_iso = datetime.fromtimestamp(
         sms_record.received_at / 1000
     ).isoformat()
@@ -112,8 +108,9 @@ async def receive_sms(
 
     logger.info("[RECEIVE] Saved SMS as pending | sms_id=%s", sms_record.id)
 
-    # Notify connected WebSockets immediately
-    await manager.broadcast(payload)
+    # Only broadcast to sockets registered under THIS device_id, so
+    # Phone A's dashboard never sees Phone B's live updates.
+    await manager.broadcast_to_device(sms_record.device_id, payload)
 
     settings = crud.get_settings(db)
     logger.info(
@@ -129,9 +126,10 @@ async def receive_sms(
         )
         crud.mark_failed(db, sms_record.id, "No endpoint configured")
 
-        updated_sms = crud.get_sms(db, sms_record.id)
-        await manager.broadcast(
-            schemas.SmsResponse.model_validate(updated_sms).model_dump(mode="json")
+        updated_sms = crud.get_sms(db, sms_record.id, sms_record.device_id)
+        await manager.broadcast_to_device(
+            sms_record.device_id,
+            schemas.SmsResponse.model_validate(updated_sms).model_dump(mode="json"),
         )
         return {
             "success": False,
@@ -139,7 +137,6 @@ async def receive_sms(
         }
 
     try:
-        # Non-blocking async outbound request
         response = await forward_sms_async(
             settings.storage_endpoint,
             settings.storage_api_key,
@@ -163,8 +160,7 @@ async def receive_sms(
         logger.exception(e)
         crud.mark_failed(db, sms_record.id, str(e))
 
-    # Retrieve and broadcast finalized status
-    final_sms = crud.get_sms(db, sms_record.id)
+    final_sms = crud.get_sms(db, sms_record.id, sms_record.device_id)
     logger.info(
         "[RECEIVE] Final status | sms_id=%s status=%s response_code=%s error=%s",
         final_sms.id,
@@ -174,32 +170,30 @@ async def receive_sms(
     )
 
     final_payload = schemas.SmsResponse.model_validate(final_sms).model_dump(mode="json")
-    await manager.broadcast(final_payload)
+    await manager.broadcast_to_device(final_sms.device_id, final_payload)
 
     return schemas.SmsResponse.model_validate(final_sms)
 
 
 # ==========================================================
-# OTHER ENDPOINTS (unchanged but cleaned)
+# OTHER ENDPOINTS (now scoped by device_id)
 # ==========================================================
 
 @router.get("/sms/list", response_model=schemas.SmsListResponse)
 def list_sms(
+    device_id: str = Query(...),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=100),
     search: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    return crud.list_sms(db, page, size, search)
+    return crud.list_sms(db, device_id, page, size, search)
 
-
-# ==========================================================
-# DASHBOARD REFRESH ALIAS (Returns full dictionary wrapper)
-# ==========================================================
 
 @router.get("/sms", response_model=schemas.SmsListResponse)
 @router.get("/sms/", response_model=schemas.SmsListResponse, include_in_schema=False)
 def dashboard_refresh_alias(
+    device_id: str = Query(...),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=100),
     search: Optional[str] = None,
@@ -208,31 +202,32 @@ def dashboard_refresh_alias(
     """
     Reroutes base GET requests into the core message pagination query,
     returning the full schema wrapper containing the "items" array.
+    Now requires device_id so each dashboard only sees its own messages.
     """
-    return crud.list_sms(db, page, size, search)
+    return crud.list_sms(db, device_id, page, size, search)
 
 
 @router.get("/sms/{sms_id}", response_model=schemas.SmsResponse)
-def get_sms(sms_id: str, db: Session = Depends(get_db)):
-    sms = crud.get_sms(db, sms_id)
+def get_sms(sms_id: str, device_id: str = Query(...), db: Session = Depends(get_db)):
+    sms = crud.get_sms(db, sms_id, device_id)
     if sms is None:
         raise HTTPException(status_code=404, detail="SMS not found")
     return sms
 
 
 @router.delete("/sms/{sms_id}")
-def delete_sms(sms_id: str, db: Session = Depends(get_db)):
-    if not crud.delete_sms(db, sms_id):
+def delete_sms(sms_id: str, device_id: str = Query(...), db: Session = Depends(get_db)):
+    if not crud.delete_sms(db, sms_id, device_id):
         raise HTTPException(status_code=404, detail="SMS not found")
     return {"success": True}
 
 
 @router.delete("/sms")
-def clear_sms(db: Session = Depends(get_db)):
-    crud.clear_cache(db)
+def clear_sms(device_id: str = Query(...), db: Session = Depends(get_db)):
+    crud.clear_cache(db, device_id)
     return {"success": True, "message": "Dashboard cache cleared"}
 
 
 @router.get("/sms/stats")
-def dashboard_stats(db: Session = Depends(get_db)):
-    return crud.dashboard_stats(db)
+def dashboard_stats(device_id: str = Query(...), db: Session = Depends(get_db)):
+    return crud.dashboard_stats(db, device_id)
