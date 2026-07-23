@@ -195,6 +195,10 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
 # ==========================================================
 
 def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
+    # Intentionally NOT filtering by `deleted` here — if the same sms.id
+    # comes in again (retry/duplicate from the native worker), we want to
+    # recognize it as existing even if the user had soft-deleted it,
+    # rather than creating a second row with the same id.
     existing = db.query(models.SMS).filter(models.SMS.id == sms.id).first()
     if existing:
         return existing, True
@@ -224,6 +228,7 @@ def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
         timestamp=parsed_timestamp,
         status="pending",
         forwarded=False,
+        deleted=False,
     )
 
     db.add(sms_record)
@@ -266,13 +271,17 @@ def mark_failed(db: Session, sms_id: str, error: str) -> Optional[models.SMS]:
 
 
 # ==========================================================
-# RETRIEVAL & UTILITIES (now scoped by device_id)
+# RETRIEVAL & UTILITIES (scoped by device_id, soft-delete aware)
 # ==========================================================
 
 def get_sms(db: Session, sms_id: str, device_id: str) -> Optional[models.SMS]:
     return (
         db.query(models.SMS)
-        .filter(models.SMS.id == sms_id, models.SMS.device_id == device_id)
+        .filter(
+            models.SMS.id == sms_id,
+            models.SMS.device_id == device_id,
+            models.SMS.deleted == False,
+        )
         .first()
     )
 
@@ -284,7 +293,10 @@ def list_sms(
     size: int = 50,
     search: Optional[str] = None,
 ) -> dict:
-    query = db.query(models.SMS).filter(models.SMS.device_id == device_id)
+    query = db.query(models.SMS).filter(
+        models.SMS.device_id == device_id,
+        models.SMS.deleted == False,
+    )
 
     if search:
         query = query.filter(
@@ -313,25 +325,38 @@ def list_sms(
 
 
 def delete_sms(db: Session, sms_id: str, device_id: str) -> bool:
+    """
+    Soft delete: the row is NEVER removed from the database. It's only
+    flagged as `deleted`, which hides it from this device's dashboard
+    going forward. The record is retained permanently for future reference.
+    """
     sms = get_sms(db, sms_id, device_id)
     if sms is None:
         return False
 
-    db.delete(sms)
+    sms.deleted = True
     db.commit()
     return True
 
 
 def clear_cache(db: Session, device_id: str) -> bool:
-    # Scoped to one device only — a single dashboard clearing its own
-    # history should never wipe every other user's messages.
-    db.query(models.SMS).filter(models.SMS.device_id == device_id).delete()
+    """
+    "Clear all" for a device — soft-deletes every non-deleted row belonging
+    to that device_id. Nothing is physically removed from the database.
+    """
+    db.query(models.SMS).filter(
+        models.SMS.device_id == device_id,
+        models.SMS.deleted == False,
+    ).update({"deleted": True})
     db.commit()
     return True
 
 
 def dashboard_stats(db: Session, device_id: str) -> dict:
-    base = db.query(models.SMS).filter(models.SMS.device_id == device_id)
+    base = db.query(models.SMS).filter(
+        models.SMS.device_id == device_id,
+        models.SMS.deleted == False,
+    )
 
     pending = base.filter(models.SMS.status == "pending").count()
     success = base.filter(models.SMS.status == "success").count()

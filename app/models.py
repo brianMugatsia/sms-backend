@@ -77,6 +77,7 @@ class SMS(Base):
     device_id: Mapped[str] = mapped_column(
         String(150),
         nullable=False,
+        index=True,
     )
 
     received_at: Mapped[int] = mapped_column(
@@ -108,4 +109,14 @@ class SMS(Base):
     error: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
+    )
+
+    # Soft-delete flag: when True, the row is hidden from that device's
+    # dashboard, but the record is permanently retained in the database
+    # for future reference (audit, disputes, debugging).
+    deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True,
     )
