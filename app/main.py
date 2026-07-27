@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import sentry_sdk
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware  # Added for CORS handling
 from fastapi.responses import JSONResponse
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 
@@ -68,6 +69,17 @@ app = FastAPI(
     title="SMS Forwarding Backend",
     version="4.0.0",
     lifespan=lifespan,
+)
+
+# ==========================================================
+# CORS Middleware (Fixes WebSocket 403 Forbidden)
+# ==========================================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows connections from mobile apps/browsers
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ==========================================================
