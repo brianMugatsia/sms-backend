@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from math import ceil
 import time
@@ -21,10 +21,16 @@ from app import models, schemas
 # UTILS / HELPER FUNCTIONS
 # ==========================================================
 
-def parse_ms_timestamp(val) -> Optional[str]:
+def parse_ms_timestamp(val) -> Optional[datetime]:
     """
-    Safely converts incoming millisecond or second epoch timestamps
-    into a standardized string (YYYY-MM-DD HH:MM:SS) for DateTime columns.
+    Safely converts incoming millisecond or second epoch timestamps into
+    a timezone-aware UTC datetime.
+
+    Deliberately returns an aware UTC datetime (not a naive local-time
+    string) so it can be stored directly into a DateTime(timezone=True)
+    column without any ambiguity about what timezone it represents. The
+    single conversion to Africa/Nairobi for display happens once, at the
+    API response boundary (schemas.py) — never here.
     """
     if val is None:
         return None
@@ -33,8 +39,7 @@ def parse_ms_timestamp(val) -> Optional[str]:
         if len(str(int(val_float))) >= 13:
             val_float = val_float / 1000.0
 
-        dt = datetime.fromtimestamp(val_float)
-        return dt.strftime('%Y-%m-%d %H:%M:%S')
+        return datetime.fromtimestamp(val_float, tz=timezone.utc)
     except Exception as e:
         logging.error(f"Failed to parse timestamp {val}: {e}")
         return None
@@ -203,21 +208,20 @@ def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
     if existing:
         return existing, True
 
-    raw_received = getattr(sms, "received_at", None)
-    raw_timestamp = getattr(sms, "timestamp", None) or raw_received
+    raw_received = sms.received_at
 
-    now_dt = datetime.utcnow()
+    now_dt = datetime.now(timezone.utc)
     now_ms = int(now_dt.timestamp() * 1000)
 
     parsed_received = parse_epoch_int(raw_received)
     if parsed_received is None:
         parsed_received = now_ms
 
-    parsed_timestamp_str = parse_ms_timestamp(raw_timestamp)
-    if parsed_timestamp_str:
-        parsed_timestamp = datetime.strptime(parsed_timestamp_str, '%Y-%m-%d %H:%M:%S')
-    else:
-        parsed_timestamp = now_dt
+    # SmsCreate only ever carries `received_at` (there's no separate
+    # `timestamp` field coming from the phone), so we derive `timestamp`
+    # from the same epoch value — now as an aware UTC datetime, not a
+    # naive local-time string round-tripped through strptime.
+    parsed_timestamp = parse_ms_timestamp(raw_received) or now_dt
 
     sms_record = models.SMS(
         id=sms.id,

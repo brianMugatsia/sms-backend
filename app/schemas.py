@@ -1,6 +1,23 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, ConfigDict, Field
+from zoneinfo import ZoneInfo
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+NAIROBI_TZ = ZoneInfo("Africa/Nairobi")
+
+
+def to_nairobi(value: datetime) -> datetime:
+    """
+    Normalizes any datetime (naive or aware, whatever tz label the DB
+    driver returns) to an aware Africa/Nairobi datetime representing
+    the same absolute instant.
+    """
+    if value.tzinfo is None:
+        # Shouldn't happen given DateTime(timezone=True) + the aware
+        # UTC datetimes crud.py now stores, but guards against a naive
+        # value slipping through (e.g. from SQLite in local dev).
+        value = value.replace(tzinfo=NAIROBI_TZ)
+    return value.astimezone(NAIROBI_TZ)
 
 
 # ==========================================================
@@ -58,6 +75,10 @@ class SmsResponse(BaseModel):
 
     response_code: Optional[int] = None
     error: Optional[str] = None
+
+    @field_serializer("timestamp")
+    def serialize_timestamp(self, value: datetime) -> str:
+        return to_nairobi(value).isoformat()
 
 
 # ==========================================================
