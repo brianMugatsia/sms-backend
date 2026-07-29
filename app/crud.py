@@ -17,9 +17,7 @@ from requests.exceptions import (
 from app import models, schemas
 
 
-# ==========================================================
 # UTILS / HELPER FUNCTIONS
-# ==========================================================
 
 def parse_ms_timestamp(val) -> Optional[datetime]:
     """
@@ -63,9 +61,7 @@ def parse_epoch_int(val) -> Optional[int]:
         return None
 
 
-# ==========================================================
 # SETTINGS
-# ==========================================================
 
 def get_settings(db: Session) -> models.InstanceSettings:
     settings = (
@@ -92,9 +88,7 @@ def update_settings(db: Session, settings: schemas.EndpointSettings) -> models.I
     return instance
 
 
-# ==========================================================
 # TEST STORAGE ENDPOINT
-# ==========================================================
 
 def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
     endpoint = (endpoint or "").strip()
@@ -195,9 +189,7 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
         return {"success": False, "message": str(e), "status_code": None}
 
 
-# ==========================================================
 # CREATE SMS CACHE
-# ==========================================================
 
 def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
     # Intentionally NOT filtering by `deleted` here — if the same sms.id
@@ -241,9 +233,7 @@ def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
     return sms_record, False
 
 
-# ==========================================================
 # STATUS MODIFIERS
-# ==========================================================
 
 def mark_success(db: Session, sms_id: str, response_code: int) -> Optional[models.SMS]:
     sms = db.query(models.SMS).filter(models.SMS.id == sms_id).first()
@@ -274,9 +264,7 @@ def mark_failed(db: Session, sms_id: str, error: str) -> Optional[models.SMS]:
     return sms
 
 
-# ==========================================================
 # RETRIEVAL & UTILITIES (scoped by device_id, soft-delete aware)
-# ==========================================================
 
 def get_sms(db: Session, sms_id: str, device_id: str) -> Optional[models.SMS]:
     return (

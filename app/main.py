@@ -16,15 +16,12 @@ from app.websocket import router as websocket_router
 
 load_dotenv()
 
-# ==========================================================
 # DATABASE
-# ==========================================================
+
 
 Base.metadata.create_all(bind=engine)
 
-# ==========================================================
 # LOGGING
-# ==========================================================
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -33,9 +30,8 @@ logging.basicConfig(
 
 logger = logging.getLogger("sms_backend")
 
-# ==========================================================
 # SENTRY (OPTIONAL)
-# ==========================================================
+
 
 SENTRY_DSN = os.getenv("SENTRY_DSN")
 
@@ -47,9 +43,8 @@ if SENTRY_DSN:
         send_default_pii=True,
     )
 
-# ==========================================================
+
 # APPLICATION LIFESPAN
-# ==========================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -165,9 +160,8 @@ app.include_router(
     websocket_router,
 )
 
-# ==========================================================
+
 # GLOBAL ERROR HANDLER
-# ==========================================================
 
 @app.exception_handler(Exception)
 async def global_exception_handler(

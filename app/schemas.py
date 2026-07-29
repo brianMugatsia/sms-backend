@@ -20,9 +20,8 @@ def to_nairobi(value: datetime) -> datetime:
     return value.astimezone(NAIROBI_TZ)
 
 
-# ==========================================================
+
 # HEALTH
-# ==========================================================
 
 class HealthResponse(BaseModel):
     status: str
@@ -30,9 +29,7 @@ class HealthResponse(BaseModel):
     version: str
 
 
-# ==========================================================
 # SETTINGS
-# ==========================================================
 
 class EndpointSettings(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -41,9 +38,7 @@ class EndpointSettings(BaseModel):
     storage_api_key: Optional[str] = Field(None, max_length=500)
 
 
-# ==========================================================
 # SMS RECEIVED FROM PHONE
-# ==========================================================
 
 class SmsCreate(BaseModel):
     # Field constraints protect your database from buffer issues/invalid writes
@@ -54,9 +49,7 @@ class SmsCreate(BaseModel):
     received_at: int
 
 
-# ==========================================================
 # SMS CACHE RESPONSE
-# ==========================================================
 
 class SmsResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -81,9 +74,8 @@ class SmsResponse(BaseModel):
         return to_nairobi(value).isoformat()
 
 
-# ==========================================================
+
 # PAGINATION
-# ==========================================================
 
 class Pagination(BaseModel):
     page: int
@@ -92,26 +84,22 @@ class Pagination(BaseModel):
     pages: int
 
 
-# ==========================================================
+
 # SMS LIST
-# ==========================================================
 
 class SmsListResponse(BaseModel):
     items: list[SmsResponse]
     pagination: Pagination
 
 
-# ==========================================================
 # WEBSOCKET MESSAGE (Inherits from SmsResponse to stay DRY)
-# ==========================================================
 
 class BroadcastSms(SmsResponse):
     pass
 
 
-# ==========================================================
 # SIMPLE RESPONSE / ENDPOINT TESTING
-# ==========================================================
+
 
 class MessageResponse(BaseModel):
     success: bool

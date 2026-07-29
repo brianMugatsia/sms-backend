@@ -19,10 +19,9 @@ def nairobi_now() -> datetime:
     return datetime.now(NAIROBI_TZ)
 
 
-# ==========================================================
+
 # INSTANCE SETTINGS
 # Single configuration row table
-# ==========================================================
 
 class InstanceSettings(Base):
     __tablename__ = "settings"
@@ -50,10 +49,8 @@ class InstanceSettings(Base):
     )
 
 
-# ==========================================================
 # SMS CACHE
 # Lightweight diagnostic storage for WebSockets & dashboard
-# ==========================================================
 
 class SMS(Base):
     __tablename__ = "sms_cache"

@@ -4,9 +4,7 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-# ---------------------------------------------------------
 # Load Environment Variables
-# ---------------------------------------------------------
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -16,9 +14,7 @@ if not DATABASE_URL:
         "DATABASE_URL environment variable is not set."
     )
 
-# ---------------------------------------------------------
 # SQLAlchemy Engine
-# ---------------------------------------------------------
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
@@ -26,9 +22,7 @@ engine = create_engine(
     future=True,
 )
 
-# ---------------------------------------------------------
 # Session Factory
-# ---------------------------------------------------------
 SessionLocal = sessionmaker(
     bind=engine,
     autoflush=False,
@@ -36,16 +30,13 @@ SessionLocal = sessionmaker(
     expire_on_commit=False,
 )
 
-# ---------------------------------------------------------
 # Base
-# ---------------------------------------------------------
 class Base(DeclarativeBase):
     pass
 
 
-# ---------------------------------------------------------
 # Dependency
-# ---------------------------------------------------------
+
 def get_db():
     db = SessionLocal()
 
