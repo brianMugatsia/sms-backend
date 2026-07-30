@@ -7,7 +7,8 @@ import sentry_sdk
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware  # Added for CORS handling
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 from app.database import Base, engine
@@ -17,7 +18,6 @@ from app.websocket import router as websocket_router
 load_dotenv()
 
 # DATABASE
-
 
 Base.metadata.create_all(bind=engine)
 
@@ -31,7 +31,6 @@ logging.basicConfig(
 logger = logging.getLogger("sms_backend")
 
 # SENTRY (OPTIONAL)
-
 
 SENTRY_DSN = os.getenv("SENTRY_DSN")
 
@@ -49,15 +48,11 @@ if SENTRY_DSN:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    logger.info("======================================")
     logger.info("SMS Forwarding Backend Started")
-    logger.info("======================================")
 
     yield
 
-    logger.info("======================================")
     logger.info("SMS Forwarding Backend Stopped")
-    logger.info("======================================")
 
 
 app = FastAPI(
@@ -66,9 +61,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ==========================================================
 # CORS Middleware (Fixes WebSocket 403 Forbidden)
-# ==========================================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allows connections from mobile apps/browsers
@@ -77,9 +70,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==========================================================
+# STATIC FILES (favicon, etc.)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 # REQUEST LOGGER
-# ==========================================================
 
 @app.middleware("http")
 async def request_logger(
@@ -106,9 +100,7 @@ async def request_logger(
 
     return response
 
-# ==========================================================
 # ROOT
-# ==========================================================
 
 @app.get("/")
 def root():
@@ -120,9 +112,14 @@ def root():
     }
 
 
-# ==========================================================
+# FAVICON
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse("static/favicon.ico")
+
+
 # HEALTH
-# ==========================================================
 
 @app.get("/api/health")
 def health():
@@ -132,9 +129,7 @@ def health():
     }
 
 
-# ==========================================================
 # SETTINGS ROUTES
-# ==========================================================
 
 app.include_router(
     settings.router,
@@ -142,9 +137,8 @@ app.include_router(
     tags=["Settings"],
 )
 
-# ==========================================================
+
 # SMS ROUTES
-# ==========================================================
 
 app.include_router(
     sms.router,
@@ -152,9 +146,8 @@ app.include_router(
     tags=["SMS"],
 )
 
-# ==========================================================
+
 # WEBSOCKET
-# ==========================================================
 
 app.include_router(
     websocket_router,
