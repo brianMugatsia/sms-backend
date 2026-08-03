@@ -112,18 +112,14 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
     if api_key:
         headers["X-API-Key"] = api_key
 
-    is_unitas = "unitas/payment" in endpoint
-
-    if is_unitas:
-        payload = {
-            "id": "00000000-0000-0000-0000-000000000000",
-            "sender": "TEST_PING",
-            "message": "This is a backend test connection",
-            "device_id": "fastapi-backend-test",
-            "received_at": int(time.time() * 1000)
-        }
-    else:
-        payload = {"ping": True}
+    # Standardized mock SMS payload sent to ALL custom testing endpoints
+    payload = {
+        "id": "00000000-0000-0000-0000-000000000000",
+        "sender": "TEST_PING",
+        "message": "This is a backend test connection",
+        "device_id": "fastapi-backend-test",
+        "received_at": int(time.time() * 1000)
+    }
 
     try:
         logging.info("=" * 60)
@@ -200,10 +196,6 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
 # CREATE SMS CACHE
 
 def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
-    # Intentionally NOT filtering by `deleted` here — if the same sms.id
-    # comes in again (retry/duplicate from the native worker), we want to
-    # recognize it as existing even if the user had soft-deleted it,
-    # rather than creating a second row with the same id.
     existing = db.query(models.SMS).filter(models.SMS.id == sms.id).first()
     if existing:
         return existing, True
@@ -217,10 +209,6 @@ def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
     if parsed_received is None:
         parsed_received = now_ms
 
-    # SmsCreate only ever carries `received_at` (there's no separate
-    # `timestamp` field coming from the phone), so we derive `timestamp`
-    # from the same epoch value — now as an aware UTC datetime, not a
-    # naive local-time string round-tripped through strptime.
     parsed_timestamp = parse_ms_timestamp(raw_received) or now_dt
 
     sms_record = models.SMS(
@@ -325,11 +313,6 @@ def list_sms(
 
 
 def delete_sms(db: Session, sms_id: str, device_id: str) -> bool:
-    """
-    Soft delete: the row is NEVER removed from the database. It's only
-    flagged as `deleted`, which hides it from this device's dashboard
-    going forward. The record is retained permanently for future reference.
-    """
     sms = get_sms(db, sms_id, device_id)
     if sms is None:
         return False
@@ -340,10 +323,6 @@ def delete_sms(db: Session, sms_id: str, device_id: str) -> bool:
 
 
 def clear_cache(db: Session, device_id: str) -> bool:
-    """
-    "Clear all" for a device — soft-deletes every non-deleted row belonging
-    to that device_id. Nothing is physically removed from the database.
-    """
     db.query(models.SMS).filter(
         models.SMS.device_id == device_id,
         models.SMS.deleted == False,
