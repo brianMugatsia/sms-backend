@@ -126,12 +126,20 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
         payload = {"ping": True}
 
     try:
+        logging.info("=" * 60)
+        logging.info(f"Testing endpoint: {endpoint}")
+        logging.info(f"Headers: {headers}")
+        logging.info(f"Payload: {payload}")
         response = requests.post(
             endpoint,
             json=payload,
             headers=headers,
             timeout=10,
         )
+        logging.info(f"Response Status: {response.status_code}")
+        logging.info(f"Response Headers: {dict(response.headers)}")
+        logging.info(f"Response Body: {response.text}")
+        logging.info("=" * 60)
 
         try:
             res_json = response.json()
