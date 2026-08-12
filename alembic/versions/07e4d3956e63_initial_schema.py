@@ -41,7 +41,8 @@ def upgrade() -> None:
         existing_type=mysql.VARCHAR(length=36),
         type_=sa.Integer(),
         existing_nullable=False,
-        autoincrement=True
+        autoincrement=True,
+        postgresql_using='id::integer'  # Fix: explicit cast for PostgreSQL
     )
     op.alter_column(
         'users', 'username',
@@ -134,7 +135,8 @@ def downgrade() -> None:
         existing_type=sa.Integer(),
         type_=mysql.VARCHAR(length=36),
         existing_nullable=False,
-        autoincrement=True
+        autoincrement=True,
+        postgresql_using='id::text'  # Fix: explicit cast back to text for PostgreSQL
     )
     op.drop_column('users', 'updated_at')
     op.drop_column('users', 'created_at')
