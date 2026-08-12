@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Index,
     Integer,
     String,
     Text,
@@ -19,9 +20,10 @@ def nairobi_now() -> datetime:
     return datetime.now(NAIROBI_TZ)
 
 
-
+# ==========================================================
 # INSTANCE SETTINGS
-# Single configuration row table
+# ==========================================================
+# One row PER DEVICE — each phone gets its own storage endpoint/key
 
 class InstanceSettings(Base):
     __tablename__ = "settings"
@@ -29,7 +31,14 @@ class InstanceSettings(Base):
     id: Mapped[int] = mapped_column(
         Integer,
         primary_key=True,
-        default=1,
+        autoincrement=True,
+    )
+
+    device_id: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False,
+        unique=True,
+        index=True,
     )
 
     storage_endpoint: Mapped[Optional[str]] = mapped_column(
@@ -49,7 +58,9 @@ class InstanceSettings(Base):
     )
 
 
+# ==========================================================
 # SMS CACHE
+# ==========================================================
 # Lightweight diagnostic storage for WebSockets & dashboard
 
 class SMS(Base):
@@ -63,7 +74,6 @@ class SMS(Base):
     sender: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
-        index=True,
     )
 
     message: Mapped[str] = mapped_column(
@@ -74,7 +84,6 @@ class SMS(Base):
     device_id: Mapped[str] = mapped_column(
         String(150),
         nullable=False,
-        index=True,
     )
 
     received_at: Mapped[int] = mapped_column(
@@ -85,7 +94,6 @@ class SMS(Base):
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=nairobi_now,
-        index=True,
     )
 
     status: Mapped[str] = mapped_column(
@@ -108,12 +116,18 @@ class SMS(Base):
         nullable=True,
     )
 
-    # Soft-delete flag: when True, the row is hidden from that device's
-    # dashboard, but the record is permanently retained in the database
-    # for future reference (audit, disputes, debugging).
     deleted: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
         nullable=False,
-        index=True,
+    )
+
+    __table_args__ = (
+        # 1. Primary composite index for list_sms paginated feeds
+        # Covers: WHERE device_id = ? AND deleted = False ORDER BY timestamp DESC
+        Index("idx_sms_device_deleted_timestamp", "device_id", "deleted", "timestamp"),
+
+        # 2. Aggregation index for dashboard_stats
+        # Covers: WHERE device_id = ? AND deleted = False GROUP BY status
+        Index("idx_sms_device_deleted_status", "device_id", "deleted", "status"),
     )

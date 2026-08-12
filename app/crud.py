@@ -3,33 +3,23 @@ import logging
 from math import ceil
 import time
 from typing import Optional
+import httpx
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
-from urllib.parse import urlparse
-import requests
-from requests.exceptions import (
-    ConnectionError,
-    InvalidURL,
-    MissingSchema,
-    SSLError,
-    Timeout,
-)
 
 from app import models, schemas
 
+logger = logging.getLogger("sms_backend")
 
+# Shared async client for endpoint validation
+async_client = httpx.AsyncClient(timeout=10.0)
+
+
+# ==========================================================
 # UTILS / HELPER FUNCTIONS
+# ==========================================================
 
 def parse_ms_timestamp(val) -> Optional[datetime]:
-    """
-    Safely converts incoming millisecond or second epoch timestamps into
-    a timezone-aware UTC datetime.
-
-    Deliberately returns an aware UTC datetime (not a naive local-time
-    string) so it can be stored directly into a DateTime(timezone=True)
-    column without any ambiguity about what timezone it represents. The
-    single conversion to Africa/Nairobi for display happens once, at the
-    API response boundary (schemas.py) — never here.
-    """
     if val is None:
         return None
     try:
@@ -39,16 +29,11 @@ def parse_ms_timestamp(val) -> Optional[datetime]:
 
         return datetime.fromtimestamp(val_float, tz=timezone.utc)
     except Exception as e:
-        logging.error(f"Failed to parse timestamp {val}: {e}")
+        logger.error(f"Failed to parse timestamp {val}: {e}")
         return None
 
 
 def parse_epoch_int(val) -> Optional[int]:
-    """
-    Safely converts incoming epoch timestamps (seconds or milliseconds)
-    into a standardized epoch-milliseconds integer, for BigInteger columns
-    like `received_at`.
-    """
     if val is None:
         return None
     try:
@@ -57,21 +42,23 @@ def parse_epoch_int(val) -> Optional[int]:
             val_float = val_float * 1000.0
         return int(val_float)
     except Exception as e:
-        logging.error(f"Failed to parse epoch int {val}: {e}")
+        logger.error(f"Failed to parse epoch int {val}: {e}")
         return None
 
 
-# SETTINGS
+# ==========================================================
+# SETTINGS (Per-Device)
+# ==========================================================
 
-def get_settings(db: Session) -> models.InstanceSettings:
+def get_settings(db: Session, device_id: str) -> models.InstanceSettings:
     settings = (
         db.query(models.InstanceSettings)
-        .filter(models.InstanceSettings.id == 1)
+        .filter(models.InstanceSettings.device_id == device_id)
         .first()
     )
 
     if settings is None:
-        settings = models.InstanceSettings(id=1)
+        settings = models.InstanceSettings(device_id=device_id)
         db.add(settings)
         db.commit()
         db.refresh(settings)
@@ -79,8 +66,12 @@ def get_settings(db: Session) -> models.InstanceSettings:
     return settings
 
 
-def update_settings(db: Session, settings: schemas.EndpointSettings) -> models.InstanceSettings:
-    instance = get_settings(db)
+def update_settings(
+    db: Session,
+    device_id: str,
+    settings: schemas.EndpointSettings,
+) -> models.InstanceSettings:
+    instance = get_settings(db, device_id)
     instance.storage_endpoint = settings.storage_endpoint
     instance.storage_api_key = settings.storage_api_key
     db.commit()
@@ -88,9 +79,13 @@ def update_settings(db: Session, settings: schemas.EndpointSettings) -> models.I
     return instance
 
 
-# TEST STORAGE ENDPOINT
+# ==========================================================
+# ASYNC TEST STORAGE ENDPOINT
+# ==========================================================
 
-def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
+async def test_storage_endpoint_async(
+    endpoint: str, api_key: Optional[str] = None
+) -> dict:
     endpoint = (endpoint or "").strip()
 
     if not endpoint:
@@ -100,8 +95,7 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
             "status_code": None,
         }
 
-    parsed = urlparse(endpoint)
-    if parsed.scheme not in ("http", "https"):
+    if not (endpoint.startswith("http://") or endpoint.startswith("https://")):
         return {
             "success": False,
             "message": "URL must start with http:// or https://",
@@ -112,30 +106,20 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
     if api_key:
         headers["X-API-Key"] = api_key
 
-    # Standardized mock SMS payload sent to ALL custom testing endpoints
     payload = {
         "id": "00000000-0000-0000-0000-000000000000",
         "sender": "TEST_PING",
         "message": "This is a backend test connection",
         "device_id": "fastapi-backend-test",
-        "received_at": int(time.time() * 1000)
+        "received_at": int(time.time() * 1000),
     }
 
     try:
-        logging.info("=" * 60)
-        logging.info(f"Testing endpoint: {endpoint}")
-        logging.info(f"Headers: {headers}")
-        logging.info(f"Payload: {payload}")
-        response = requests.post(
+        response = await async_client.post(
             endpoint,
             json=payload,
             headers=headers,
-            timeout=10,
         )
-        logging.info(f"Response Status: {response.status_code}")
-        logging.info(f"Response Headers: {dict(response.headers)}")
-        logging.info(f"Response Body: {response.text}")
-        logging.info("=" * 60)
 
         try:
             res_json = response.json()
@@ -144,10 +128,10 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
             res_json = {}
             status_text = None
 
-        is_success = (
-            (200 <= response.status_code < 300) or
-            status_text in ["success", "duplicate"]
-        )
+        is_success = (200 <= response.status_code < 300) or status_text in [
+            "success",
+            "duplicate",
+        ]
 
         if is_success:
             message = "Connection successful."
@@ -168,32 +152,25 @@ def test_storage_endpoint(endpoint: str, api_key: Optional[str] = None) -> dict:
             404: "Endpoint not found (404).",
         }
 
-        if status_text in ["success", "duplicate"]:
-            return {
-                "success": True,
-                "message": "Endpoint verified.",
-                "status_code": response.status_code,
-            }
-
         return {
             "success": False,
-            "message": status_messages.get(response.status_code, f"Endpoint returned HTTP {response.status_code}."),
+            "message": status_messages.get(
+                response.status_code, f"Endpoint returned HTTP {response.status_code}."
+            ),
             "status_code": response.status_code,
         }
 
-    except (MissingSchema, InvalidURL):
-        return {"success": False, "message": "Invalid URL.", "status_code": None}
-    except Timeout:
+    except httpx.TimeoutException:
         return {"success": False, "message": "Connection timed out.", "status_code": None}
-    except ConnectionError:
-        return {"success": False, "message": "Unable to connect to the server.", "status_code": None}
-    except SSLError:
-        return {"success": False, "message": "SSL certificate error.", "status_code": None}
+    except httpx.RequestError as e:
+        return {"success": False, "message": f"Network error: {str(e)}", "status_code": None}
     except Exception as e:
         return {"success": False, "message": str(e), "status_code": None}
 
 
-# CREATE SMS CACHE
+# ==========================================================
+# CREATE & UPDATE SMS
+# ==========================================================
 
 def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
     existing = db.query(models.SMS).filter(models.SMS.id == sms.id).first()
@@ -201,14 +178,10 @@ def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
         return existing, True
 
     raw_received = sms.received_at
-
     now_dt = datetime.now(timezone.utc)
     now_ms = int(now_dt.timestamp() * 1000)
 
-    parsed_received = parse_epoch_int(raw_received)
-    if parsed_received is None:
-        parsed_received = now_ms
-
+    parsed_received = parse_epoch_int(raw_received) or now_ms
     parsed_timestamp = parse_ms_timestamp(raw_received) or now_dt
 
     sms_record = models.SMS(
@@ -229,11 +202,9 @@ def create_sms(db: Session, sms: schemas.SmsCreate) -> tuple[models.SMS, bool]:
     return sms_record, False
 
 
-# STATUS MODIFIERS
-
 def mark_success(db: Session, sms_id: str, response_code: int) -> Optional[models.SMS]:
     sms = db.query(models.SMS).filter(models.SMS.id == sms_id).first()
-    if sms is None:
+    if not sms:
         return None
 
     sms.status = "success"
@@ -248,7 +219,7 @@ def mark_success(db: Session, sms_id: str, response_code: int) -> Optional[model
 
 def mark_failed(db: Session, sms_id: str, error: str) -> Optional[models.SMS]:
     sms = db.query(models.SMS).filter(models.SMS.id == sms_id).first()
-    if sms is None:
+    if not sms:
         return None
 
     sms.status = "failed"
@@ -260,7 +231,9 @@ def mark_failed(db: Session, sms_id: str, error: str) -> Optional[models.SMS]:
     return sms
 
 
-# RETRIEVAL & UTILITIES (scoped by device_id, soft-delete aware)
+# ==========================================================
+# RETRIEVAL & UTILITIES
+# ==========================================================
 
 def get_sms(db: Session, sms_id: str, device_id: str) -> Optional[models.SMS]:
     return (
@@ -287,9 +260,10 @@ def list_sms(
     )
 
     if search:
+        search_pattern = f"%{search}%"
         query = query.filter(
-            (models.SMS.sender.ilike(f"%{search}%"))
-            | (models.SMS.message.ilike(f"%{search}%"))
+            (models.SMS.sender.ilike(search_pattern))
+            | (models.SMS.message.ilike(search_pattern))
         )
 
     total = query.count()
@@ -314,7 +288,7 @@ def list_sms(
 
 def delete_sms(db: Session, sms_id: str, device_id: str) -> bool:
     sms = get_sms(db, sms_id, device_id)
-    if sms is None:
+    if not sms:
         return False
 
     sms.deleted = True
@@ -326,20 +300,29 @@ def clear_cache(db: Session, device_id: str) -> bool:
     db.query(models.SMS).filter(
         models.SMS.device_id == device_id,
         models.SMS.deleted == False,
-    ).update({"deleted": True})
+    ).update({"deleted": True}, synchronize_session=False)
     db.commit()
     return True
 
 
 def dashboard_stats(db: Session, device_id: str) -> dict:
-    base = db.query(models.SMS).filter(
-        models.SMS.device_id == device_id,
-        models.SMS.deleted == False,
+    # Single-query conditional aggregation
+    stats = (
+        db.query(
+            func.coalesce(func.sum(case((models.SMS.status == "pending", 1), else_=0)), 0).label("pending"),
+            func.coalesce(func.sum(case((models.SMS.status == "success", 1), else_=0)), 0).label("success"),
+            func.coalesce(func.sum(case((models.SMS.status == "failed", 1), else_=0)), 0).label("failed"),
+        )
+        .filter(
+            models.SMS.device_id == device_id,
+            models.SMS.deleted == False,
+        )
+        .first()
     )
 
-    pending = base.filter(models.SMS.status == "pending").count()
-    success = base.filter(models.SMS.status == "success").count()
-    failed = base.filter(models.SMS.status == "failed").count()
+    pending = int(stats.pending) if stats else 0
+    success = int(stats.success) if stats else 0
+    failed = int(stats.failed) if stats else 0
 
     return {
         "pending": pending,

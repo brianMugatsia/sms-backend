@@ -1,6 +1,6 @@
 from typing import Optional
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -16,14 +16,8 @@ logger = logging.getLogger("sms_backend")
 async_client = httpx.AsyncClient(timeout=EXTERNAL_TIMEOUT)
 
 
-# ==========================================================
-# FORWARD SMS (ASYNCHRONOUS)
-# ==========================================================
-
 async def forward_sms_async(endpoint: str, api_key: Optional[str], payload: dict) -> httpx.Response:
-    headers = {
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
     if api_key:
         headers["X-API-Key"] = api_key
 
@@ -33,7 +27,6 @@ async def forward_sms_async(endpoint: str, api_key: Optional[str], payload: dict
         payload.get("device_id"),
         payload.get("id"),
     )
-    logger.debug("[FORWARD] Payload: %s", payload)
 
     response = await async_client.post(
         endpoint,
@@ -61,10 +54,6 @@ async def forward_sms_async(endpoint: str, api_key: Optional[str], payload: dict
     return response
 
 
-# ==========================================================
-# RECEIVE SMS
-# ==========================================================
-
 @router.post("/sms/forward")
 async def receive_sms(
     sms: schemas.SmsCreate,
@@ -80,18 +69,18 @@ async def receive_sms(
     sms_record, duplicate = crud.create_sms(db=db, sms=sms)
 
     if duplicate:
-        logger.info(
-            "[RECEIVE] Duplicate SMS ignored | sms_id=%s",
-            sms.id,
-        )
-        return {
-            "success": True,
-            "duplicate": True,
-        }
+        logger.info("[RECEIVE] Duplicate SMS ignored | sms_id=%s", sms.id)
+        return {"success": True, "duplicate": True}
 
-    received_at_iso = datetime.fromtimestamp(
-        sms_record.received_at / 1000
-    ).isoformat()
+    # Safe Timestamp Conversion (handles ms vs sec vs missing)
+    try:
+        if sms_record.received_at > 1e11:  # Milliseconds
+            ts = sms_record.received_at / 1000.0
+        else:  # Seconds
+            ts = float(sms_record.received_at)
+        received_at_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    except Exception:
+        received_at_iso = datetime.now(timezone.utc).isoformat()
 
     payload = {
         "id": sms_record.id,
@@ -99,7 +88,7 @@ async def receive_sms(
         "message": sms_record.message,
         "device_id": sms_record.device_id,
         "received_at": received_at_iso,
-        "timestamp": sms_record.timestamp.isoformat(),
+        "timestamp": sms_record.timestamp.isoformat() if hasattr(sms_record.timestamp, 'isoformat') else str(sms_record.timestamp),
         "status": "pending",
         "forwarded": False,
         "response_code": None,
@@ -108,20 +97,22 @@ async def receive_sms(
 
     logger.info("[RECEIVE] Saved SMS as pending | sms_id=%s", sms_record.id)
 
-    # Only broadcast to sockets registered under THIS device_id, so
-    # Phone A's dashboard never sees Phone B's live updates.
+    # Broadcast to device-specific WebSocket pool
     await manager.broadcast_to_device(sms_record.device_id, payload)
 
-    settings = crud.get_settings(db)
+    # Device-scoped Settings lookup
+    settings = crud.get_settings(db, sms_record.device_id)
     logger.info(
-        "[RECEIVE] Configured storage_endpoint=%s | sms_id=%s",
+        "[RECEIVE] Configured storage_endpoint=%s | device_id=%s sms_id=%s",
         settings.storage_endpoint or "<not configured>",
+        sms_record.device_id,
         sms_record.id,
     )
 
     if not settings.storage_endpoint:
         logger.warning(
-            "[RECEIVE] No storage endpoint configured, marking failed | sms_id=%s",
+            "[RECEIVE] No storage endpoint configured, marking failed | device_id=%s sms_id=%s",
+            sms_record.device_id,
             sms_record.id,
         )
         crud.mark_failed(db, sms_record.id, "No endpoint configured")
@@ -131,10 +122,7 @@ async def receive_sms(
             sms_record.device_id,
             schemas.SmsResponse.model_validate(updated_sms).model_dump(mode="json"),
         )
-        return {
-            "success": False,
-            "message": "No endpoint configured",
-        }
+        return {"success": False, "message": "No endpoint configured"}
 
     try:
         response = await forward_sms_async(
@@ -144,7 +132,8 @@ async def receive_sms(
         )
 
         logger.info(
-            "[RECEIVE] Forward succeeded | sms_id=%s status_code=%s",
+            "[RECEIVE] Forward succeeded | device_id=%s sms_id=%s status_code=%s",
+            sms_record.device_id,
             sms_record.id,
             response.status_code,
         )
@@ -152,7 +141,8 @@ async def receive_sms(
 
     except Exception as e:
         logger.error(
-            "[RECEIVE] Forward failed | sms_id=%s endpoint=%s error=%s",
+            "[RECEIVE] Forward failed | device_id=%s sms_id=%s endpoint=%s error=%s",
+            sms_record.device_id,
             sms_record.id,
             settings.storage_endpoint,
             str(e),
@@ -161,22 +151,15 @@ async def receive_sms(
         crud.mark_failed(db, sms_record.id, str(e))
 
     final_sms = crud.get_sms(db, sms_record.id, sms_record.device_id)
-    logger.info(
-        "[RECEIVE] Final status | sms_id=%s status=%s response_code=%s error=%s",
-        final_sms.id,
-        final_sms.status,
-        final_sms.response_code,
-        final_sms.error,
-    )
-
     final_payload = schemas.SmsResponse.model_validate(final_sms).model_dump(mode="json")
+    
     await manager.broadcast_to_device(final_sms.device_id, final_payload)
 
     return schemas.SmsResponse.model_validate(final_sms)
 
 
 # ==========================================================
-# OTHER ENDPOINTS (now scoped by device_id)
+# QUERY ENDPOINTS
 # ==========================================================
 
 @router.get("/sms/list", response_model=schemas.SmsListResponse)
@@ -199,11 +182,6 @@ def dashboard_refresh_alias(
     search: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """
-    Reroutes base GET requests into the core message pagination query,
-    returning the full schema wrapper containing the "items" array.
-    Now requires device_id so each dashboard only sees its own messages.
-    """
     return crud.list_sms(db, device_id, page, size, search)
 
 

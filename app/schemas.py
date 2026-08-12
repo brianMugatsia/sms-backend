@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
@@ -8,20 +8,17 @@ NAIROBI_TZ = ZoneInfo("Africa/Nairobi")
 
 def to_nairobi(value: datetime) -> datetime:
     """
-    Normalizes any datetime (naive or aware, whatever tz label the DB
-    driver returns) to an aware Africa/Nairobi datetime representing
-    the same absolute instant.
+    Normalizes any datetime (naive or aware) to an aware Africa/Nairobi datetime.
+    Naive datetimes (e.g. from SQLite) are treated as UTC before shifting to EAT.
     """
     if value.tzinfo is None:
-        # Shouldn't happen given DateTime(timezone=True) + the aware
-        # UTC datetimes crud.py now stores, but guards against a naive
-        # value slipping through (e.g. from SQLite in local dev).
-        value = value.replace(tzinfo=NAIROBI_TZ)
+        value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(NAIROBI_TZ)
 
 
-
-# HEALTH
+# ==========================================================
+# HEALTH & SETTINGS
+# ==========================================================
 
 class HealthResponse(BaseModel):
     status: str
@@ -29,27 +26,25 @@ class HealthResponse(BaseModel):
     version: str
 
 
-# SETTINGS
-
 class EndpointSettings(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    device_id: str = Field(..., min_length=1, max_length=150)
     storage_endpoint: Optional[str] = Field(None, max_length=500)
     storage_api_key: Optional[str] = Field(None, max_length=500)
 
 
-# SMS RECEIVED FROM PHONE
+# ==========================================================
+# SMS PAYLOADS
+# ==========================================================
 
 class SmsCreate(BaseModel):
-    # Field constraints protect your database from buffer issues/invalid writes
     id: str = Field(..., min_length=1, max_length=120)
     sender: str = Field(..., min_length=1, max_length=100)
     message: str
     device_id: str = Field(..., min_length=1, max_length=150)
     received_at: int
 
-
-# SMS CACHE RESPONSE
 
 class SmsResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -62,7 +57,6 @@ class SmsResponse(BaseModel):
     received_at: int
     timestamp: datetime
 
-    # Dashboard status
     status: str
     forwarded: bool
 
@@ -74,8 +68,9 @@ class SmsResponse(BaseModel):
         return to_nairobi(value).isoformat()
 
 
-
-# PAGINATION
+# ==========================================================
+# LISTS & BROADCASTS
+# ==========================================================
 
 class Pagination(BaseModel):
     page: int
@@ -84,22 +79,18 @@ class Pagination(BaseModel):
     pages: int
 
 
-
-# SMS LIST
-
 class SmsListResponse(BaseModel):
     items: list[SmsResponse]
     pagination: Pagination
 
 
-# WEBSOCKET MESSAGE (Inherits from SmsResponse to stay DRY)
-
 class BroadcastSms(SmsResponse):
     pass
 
 
-# SIMPLE RESPONSE / ENDPOINT TESTING
-
+# ==========================================================
+# TESTING & UTILITIES
+# ==========================================================
 
 class MessageResponse(BaseModel):
     success: bool
