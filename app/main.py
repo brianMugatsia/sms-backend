@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware  # Added for CORS handling
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import Response
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 from app.database import Base, engine
@@ -101,6 +102,12 @@ async def request_logger(
     return response
 
 # ROOT
+
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse("static/favicon.ico")
 
 @app.get("/")
 def root():
