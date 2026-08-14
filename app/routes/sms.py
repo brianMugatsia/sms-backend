@@ -88,7 +88,11 @@ async def receive_sms(
         "message": sms_record.message,
         "device_id": sms_record.device_id,
         "received_at": received_at_iso,
-        "timestamp": sms_record.timestamp.isoformat() if hasattr(sms_record.timestamp, 'isoformat') else str(sms_record.timestamp),
+        "timestamp": (
+            sms_record.timestamp.isoformat()
+            if hasattr(sms_record.timestamp, "isoformat")
+            else str(sms_record.timestamp)
+        ),
         "status": "pending",
         "forwarded": False,
         "response_code": None,
@@ -139,20 +143,44 @@ async def receive_sms(
         )
         crud.mark_success(db, sms_record.id, response.status_code)
 
-    except Exception as e:
+    except httpx.HTTPStatusError as e:
+        # Extract the exact response body text returned by the destination endpoint
+        response_text = e.response.text if e.response is not None else str(e)
+        error_message = f"HTTP {e.response.status_code}: {response_text[:300]}"
+
         logger.error(
-            "[RECEIVE] Forward failed | device_id=%s sms_id=%s endpoint=%s error=%s",
+            "[RECEIVE] Forward HTTP error | device_id=%s sms_id=%s status=%s detail=%s",
             sms_record.device_id,
             sms_record.id,
-            settings.storage_endpoint,
+            e.response.status_code if e.response else "N/A",
+            response_text[:500],
+        )
+        crud.mark_failed(db, sms_record.id, error_message)
+
+    except httpx.RequestError as e:
+        # Network errors (DNS failure, timeout, host unreachable)
+        logger.error(
+            "[RECEIVE] Forward network failure | device_id=%s sms_id=%s error=%s",
+            sms_record.device_id,
+            sms_record.id,
+            str(e),
+        )
+        crud.mark_failed(db, sms_record.id, f"Network Error: {str(e)[:250]}")
+
+    except Exception as e:
+        # Unexpected internal runtime errors
+        logger.error(
+            "[RECEIVE] Forward unexpected error | device_id=%s sms_id=%s error=%s",
+            sms_record.device_id,
+            sms_record.id,
             str(e),
         )
         logger.exception(e)
-        crud.mark_failed(db, sms_record.id, str(e))
+        crud.mark_failed(db, sms_record.id, f"Unexpected Error: {str(e)[:250]}")
 
     final_sms = crud.get_sms(db, sms_record.id, sms_record.device_id)
     final_payload = schemas.SmsResponse.model_validate(final_sms).model_dump(mode="json")
-    
+
     await manager.broadcast_to_device(final_sms.device_id, final_payload)
 
     return schemas.SmsResponse.model_validate(final_sms)
