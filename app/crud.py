@@ -114,6 +114,10 @@ async def test_storage_endpoint_async(
         "sender": "TEST_PING",
         "message": "This is a backend test connection",
         "device_id": "fastapi-backend-test",
+        "amount": "100.00",
+        "reference": "TEST123456",
+        "account": "TEST_ACCT",
+        "phone_number": "254700000000",
         "received_at": now_iso,
         "timestamp": now_iso,
     }
