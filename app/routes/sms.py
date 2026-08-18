@@ -16,6 +16,25 @@ logger = logging.getLogger("sms_backend")
 async_client = httpx.AsyncClient(timeout=EXTERNAL_TIMEOUT)
 
 
+def to_iso_string(val) -> str:
+    """Safely converts datetime objects, epoch numbers, or string integers into an ISO 8601 string."""
+    if val is None:
+        return datetime.now(timezone.utc).isoformat()
+    if isinstance(val, datetime):
+        return val.isoformat()
+    if isinstance(val, (int, float)):
+        ts = val / 1000.0 if val > 1e11 else float(val)
+        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    if isinstance(val, str):
+        val_str = val.strip()
+        if val_str.isdigit() or (val_str.replace(".", "", 1).isdigit() and val_str.count(".") < 2):
+            ts = float(val_str)
+            ts = ts / 1000.0 if ts > 1e11 else ts
+            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        return val_str
+    return datetime.now(timezone.utc).isoformat()
+
+
 async def forward_sms_async(endpoint: str, api_key: Optional[str], payload: dict) -> httpx.Response:
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -72,15 +91,9 @@ async def receive_sms(
         logger.info("[RECEIVE] Duplicate SMS ignored | sms_id=%s", sms.id)
         return {"success": True, "duplicate": True}
 
-    # Safe Timestamp Conversion (handles ms vs sec vs missing)
-    try:
-        if sms_record.received_at > 1e11:  # Milliseconds
-            ts = sms_record.received_at / 1000.0
-        else:  # Seconds
-            ts = float(sms_record.received_at)
-        received_at_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-    except Exception:
-        received_at_iso = datetime.now(timezone.utc).isoformat()
+    # Safe timestamp handling for both received_at and timestamp fields
+    received_at_iso = to_iso_string(getattr(sms_record, "received_at", None))
+    timestamp_iso = to_iso_string(getattr(sms_record, "timestamp", None))
 
     payload = {
         "id": sms_record.id,
@@ -88,11 +101,7 @@ async def receive_sms(
         "message": sms_record.message,
         "device_id": sms_record.device_id,
         "received_at": received_at_iso,
-        "timestamp": (
-            sms_record.timestamp.isoformat()
-            if hasattr(sms_record.timestamp, "isoformat")
-            else str(sms_record.timestamp)
-        ),
+        "timestamp": timestamp_iso,
         "status": "pending",
         "forwarded": False,
         "response_code": None,
