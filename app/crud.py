@@ -106,12 +106,16 @@ async def test_storage_endpoint_async(
     if api_key:
         headers["X-API-Key"] = api_key
 
+    # Format ISO 8601 string with UTC offset for backends expecting strict datetime fields
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     payload = {
         "id": "00000000-0000-0000-0000-000000000000",
         "sender": "TEST_PING",
         "message": "This is a backend test connection",
         "device_id": "fastapi-backend-test",
-        "received_at": int(time.time() * 1000),
+        "received_at": now_iso,
+        "timestamp": now_iso,
     }
 
     try:
