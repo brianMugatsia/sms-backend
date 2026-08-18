@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app import crud, schemas
@@ -52,6 +52,16 @@ async def test_storage_endpoint(
         endpoint=request.storage_endpoint,
         api_key=request.storage_api_key,
     )
+
+    # Raise an HTTP exception if the test failed so client receives a 502/400 instead of masking with 200 OK
+    if not result["success"]:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "message": result["message"],
+                "upstream_status_code": result.get("status_code"),
+            },
+        )
 
     return schemas.EndpointTestResponse(
         success=result["success"],

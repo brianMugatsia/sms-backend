@@ -150,21 +150,28 @@ async def test_storage_endpoint_async(
             401: "Authentication failed (401 Unauthorized).",
             403: "Access denied (403 Forbidden).",
             404: "Endpoint not found (404).",
+            500: "Upstream server error (500 Internal Server Error).",
         }
+
+        err_msg = status_messages.get(
+            response.status_code, f"Endpoint returned HTTP {response.status_code}."
+        )
+        logger.warning(f"Storage endpoint test failed for {endpoint} with status {response.status_code}: {err_msg}")
 
         return {
             "success": False,
-            "message": status_messages.get(
-                response.status_code, f"Endpoint returned HTTP {response.status_code}."
-            ),
+            "message": err_msg,
             "status_code": response.status_code,
         }
 
     except httpx.TimeoutException:
+        logger.error(f"Storage endpoint connection timed out for {endpoint}")
         return {"success": False, "message": "Connection timed out.", "status_code": None}
     except httpx.RequestError as e:
+        logger.error(f"Network error testing storage endpoint {endpoint}: {e}")
         return {"success": False, "message": f"Network error: {str(e)}", "status_code": None}
     except Exception as e:
+        logger.error(f"Unexpected error testing storage endpoint {endpoint}: {e}")
         return {"success": False, "message": str(e), "status_code": None}
 
 
